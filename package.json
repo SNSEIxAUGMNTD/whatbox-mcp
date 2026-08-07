@@ -1,0 +1,65 @@
+{
+  "name": "whatbox-mcp",
+  "version": "0.8.0",
+  "description": "A security-first MCP server for operating a Whatbox slot.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "whatbox-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    ".env.example",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check:config": "node --import tsx src/check-config.ts",
+    "check:connection": "node --import tsx src/check-connection.ts",
+    "check:directory": "node --import tsx src/check-directory.ts",
+    "check:storage": "node --import tsx src/check-storage.ts",
+    "check:structure": "node --import tsx src/check-structure.ts",
+    "check:services": "node --import tsx src/check-services.ts",
+    "check:review": "node --import tsx src/check-review.ts",
+    "check:snapshot": "node --import tsx src/check-snapshot.ts",
+    "check:torrent-clients": "node --import tsx src/check-torrent-clients.ts",
+    "check:website": "node --import tsx src/check-website.ts",
+    "dev": "node --import tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "whatbox",
+    "seedbox"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SNSEIxAUGMNTD/whatbox-mcp.git"
+  },
+  "homepage": "https://github.com/SNSEIxAUGMNTD/whatbox-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/SNSEIxAUGMNTD/whatbox-mcp/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "dotenv": "^17.4.2",
+    "ssh2": "^1.17.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ssh2": "^1.15.5",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

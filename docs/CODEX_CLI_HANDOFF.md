@@ -1,0 +1,196 @@
+# Codex CLI Handoff
+
+## Repository
+
+- Working directory: the repository root containing this document
+- Package: `whatbox-mcp`
+- Current version: `0.8.0`
+- Runtime: Node.js 20 or newer, TypeScript, ESM
+- Transport: local MCP stdio
+- Git is initialized, but the current project files are untracked and there is
+  no baseline commit. Preserve the entire working tree.
+
+## Transfer status
+
+The read-only website-readiness phase is implemented. The current continuation
+also adds local-only static-site source validation and deployment-plan
+primitives in `src/website.ts`; these do not connect to Whatbox, transfer
+files, change remote state, or register a deployment tool.
+
+The current branch also adds agent-facing output schemas, readable tool titles,
+a consolidated operational snapshot, an MCP agent-guide resource, a safe-audit
+prompt, and path-redacted storage results. Re-run the validation commands after
+any further edits.
+
+## Secret policy
+
+Never request, read aloud, print, log, or paste values from the user's local
+configuration, SSH keys, agent socket, approval key, passwords, passphrases,
+tokens, cookies, or connection strings.
+
+- Public template: `.env.example`
+- Private configuration: `~/.config/whatbox-mcp/local.env` (`0600`)
+- Authentication: dedicated key through the local SSH agent
+- Approval key: `~/.local/state/whatbox-mcp/approval.key` (`0600`)
+- Do not open or display either private file. Run only sanitized checks.
+
+The private Whatbox connection has already passed configuration, connection,
+storage, SFTP directory, structure-map, torrent-client, service-inventory, and
+configuration-review acceptance checks.
+
+## Implemented tools
+
+- `server_info`
+- `list_capabilities`
+- `whatbox_configuration_status`
+- `whatbox_connection_status`
+- `whatbox_storage_status`
+- `whatbox_list_directory`
+- `whatbox_torrent_clients_status`
+- `whatbox_structure_map`
+- `whatbox_services_status`
+- `whatbox_configuration_review`
+- `whatbox_website_readiness`
+- `whatbox_website_deployment_plan`
+- `whatbox_operational_snapshot`
+
+All current tools are read-only and carry read-only MCP annotations.
+
+Agent interfaces:
+
+- resource: `whatbox://guide/agent-operations`;
+- prompt: `whatbox_safe_audit` with `full`, `storage`, `services`, or `website` focus;
+- preferred first assessment: `whatbox_operational_snapshot`;
+- public guide: `docs/AGENT_USAGE.md`.
+
+All tools return structured content on success and declare output schemas. The
+same JSON is returned in a text block for compatibility with older clients.
+
+`src/website.ts` is not an MCP tool. It currently provides local-only
+validation and plan construction for the future static deployment flow:
+
+- explicit local source-root allowlist containment;
+- rejection of symlinks, sensitive names, unsupported entries, and excessive
+  file count/bytes;
+- stable source manifest digest without exposing file contents;
+- exact `.whatbox-releases/<release-id>` target containment;
+- reversible `website_deploy` mutation plan binding source and release digests.
+
+No remote upload, release activation, Nginx configuration write, health-check
+mutation, rollback, start, stop, or restart operation is enabled.
+
+`whatbox_website_deployment_plan` is read-only. It validates a local source
+against `WHATBOX_WEBSITE_SOURCE_ROOTS`, returns redacted counts and rejection
+reasons, creates a short-lived signed `website_deploy` plan, and always reports
+that execution is disabled. It does not return local absolute paths or file
+contents.
+
+## Implemented safety boundaries
+
+- Pinned ED25519 host fingerprint and SSH-agent authentication
+- No generic shell tool or caller-supplied command strings
+- Fixed read-only remote commands with bounded output
+- SFTP allowed-root, canonical-path, traversal, and symlink containment
+- Bounded structure maps with no file-content reads
+- Sensitive-directory exclusions and Mermaid-safe diagram labels
+- Service inventory reads allowlisted process names and known path existence;
+  it does not read process arguments or configuration contents
+- Raw connection errors and configuration values are never returned
+- Configured remote storage-root paths are removed from agent-facing storage
+  results
+- Architecture and deletion policy are in `docs/ARCHITECTURE.md` and
+  `SECURITY.md`
+
+## Approval foundation
+
+`src/approval.ts` implements:
+
+- HMAC-protected immutable mutation plans
+- Slot and exact-target digests
+- Five-minute default expiry, ten-minute hard maximum
+- Secure local key creation and permission checks
+- Atomic one-time plan consumption
+- Tests for valid, modified, expired, and reused plans
+
+No mutation tool is registered yet. Do not add deletion until the complete
+human-approval path is implemented and denial cases are tested. A tool input
+such as `confirm: true` is never sufficient.
+
+The installed MCP SDK supports the 2026 multi-round-trip `input_required`
+pattern through `inputRequired`, `acceptedContent`, and signed `requestState`.
+Use negotiated protocol interaction and fail closed when the client cannot
+present confirmation. Tool annotations are hints, not authorization.
+
+Deletion requirements:
+
+1. Plan only before execution.
+2. Explicit client-presented human approval bound to the signed plan.
+3. Exact canonical targets, no wildcards or implicit expansion.
+4. Initial removal means quarantine, not permanent deletion.
+5. Permanent purge requires a separate second approval.
+6. Missing, declined, cancelled, expired, modified, mismatched, or reused
+   approval must deny execution.
+
+## Current next objective
+
+Finish the static-site mutation phase conservatively, in this order:
+
+1. Implement fixed remote staging and manifest validation through SFTP only;
+   no generic shell or caller-supplied command strings.
+2. Add atomic release activation, fixed `nginx -t` validation, bounded health
+   checking, and rollback while keeping all writes behind an unregistered
+   internal adapter until approval is complete.
+3. Integrate the installed SDK's negotiated `input_required` flow using
+   signed request state, `acceptedContent`, and fail-closed client capability
+   handling. Do not substitute `confirm: true` or a confirmation phrase.
+4. Add redacted audit logging for planned, denied, expired, approved, executed,
+   failed, and rolled-back mutations.
+5. Live-validate only with sanitized repository check scripts. Enable a write
+   tool only after denial-path tests and a safe staging/rollback validation
+   pass.
+6. Keep Whatbox Manage Apps, managed links, DNS, and domains as explicit
+   external steps unless a separately authorized provider integration exists.
+7. After static deployment is live-validated, add read-only torrent summaries
+   through a separately configured supported client API; never reuse or infer
+   provider web credentials from SSH configuration.
+
+Do not implement PHP application deployment until static deployment and
+rollback are live-validated.
+
+## Validation
+
+Run after each increment:
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+Current local validation: typecheck passes, 34 tests pass, and production
+build passes after the `src/website.ts` increment. Re-run all three checks
+before treating any further continuation as validated.
+Use `node --import tsx` for local TypeScript scripts, matching existing npm
+scripts.
+
+For live checks, never print private configuration or raw SSH debug output.
+The user may share only the sanitized JSON emitted by repository check scripts.
+The last sanitized `npm run check:website` attempt returned
+`dns_resolution_failed` at `dns_resolution`; this is an environmental live
+check result, not evidence that website readiness is healthy or unhealthy.
+The current `npm run check:snapshot` attempt returned the same sanitized
+failure and stage without exposing configuration values.
+
+## Receiving-agent checklist
+
+```bash
+npm run typecheck
+npm test
+npm run build
+npm run check:website
+npm run check:snapshot
+```
+
+If the live check fails, report only the JSON fields emitted by the script.
+Never inspect or print `~/.config/whatbox-mcp/local.env` or
+`~/.local/state/whatbox-mcp/approval.key`.

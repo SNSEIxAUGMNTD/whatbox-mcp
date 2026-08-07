@@ -1,0 +1,9 @@
+src/
+test/
+coverage/
+.env
+.env.local
+.env.*.local
+secrets/
+.whatbox-mcp/
+
