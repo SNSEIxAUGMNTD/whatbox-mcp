@@ -9,10 +9,14 @@ import {
   isSensitiveDirectoryPath,
   parseDfOutput,
   parseNginxBinaryAvailability,
+  parseNginxConfigurationTest,
   parseServiceProcesses,
   parseTorrentClientProcesses,
+  parseWebsiteHealthProbe,
+  resolveAgentSocket,
   resolveAllowedPath,
   reviewWhatboxConfiguration,
+  summarizeNginxErrorLog,
   toSafeConnectionDiagnostic,
   toSafeConnectionFailure
 } from "./whatbox.js";
@@ -24,6 +28,22 @@ test("verifies a pinned SHA-256 host-key fingerprint", () => {
 
   assert.equal(verifier(hostKey), true);
   assert.equal(verifier(Buffer.from("different host key")), false);
+});
+
+test("resolves the SSH agent socket across platforms", () => {
+  assert.equal(
+    resolveAgentSocket({ SSH_AUTH_SOCK: "/tmp/agent.sock" }, "darwin"),
+    "/tmp/agent.sock"
+  );
+  assert.equal(
+    resolveAgentSocket({ SSH_AUTH_SOCK: "/tmp/agent.sock" }, "win32"),
+    "/tmp/agent.sock"
+  );
+  assert.equal(
+    resolveAgentSocket({}, "win32"),
+    "\\\\.\\pipe\\openssh-ssh-agent"
+  );
+  assert.equal(resolveAgentSocket({}, "linux"), undefined);
 });
 
 test("allows relative paths contained by a configured root", () => {
@@ -77,6 +97,38 @@ test("parses the fixed Nginx binary probe without accepting arbitrary output", (
   assert.equal(parseNginxBinaryAvailability("available\n"), true);
   assert.equal(parseNginxBinaryAvailability("unavailable\n"), false);
   assert.equal(parseNginxBinaryAvailability("available; cat private-file"), false);
+});
+
+test("parses fixed Nginx configuration and loopback health results", () => {
+  assert.equal(parseNginxConfigurationTest("valid\n"), "valid");
+  assert.equal(parseNginxConfigurationTest("invalid\n"), "invalid");
+  assert.equal(parseNginxConfigurationTest("valid; private output"), "unavailable");
+
+  assert.deepEqual(parseWebsiteHealthProbe("response 204 0.125\n"), {
+    state: "responding",
+    statusCode: 204,
+    latencyMs: 125
+  });
+  assert.deepEqual(parseWebsiteHealthProbe("response 503 0.004\n"), {
+    state: "server_error",
+    statusCode: 503,
+    latencyMs: 4
+  });
+  assert.deepEqual(parseWebsiteHealthProbe("unreachable\n"), {
+    state: "unreachable"
+  });
+});
+
+test("summarizes Nginx error severities without returning log lines", () => {
+  const privateLine = "2026/08/07 [error] private request path and client details";
+  const summary = summarizeNginxErrorLog(
+    `${privateLine}\n2026/08/07 [warn] another private detail\n`
+  );
+
+  assert.equal(summary.sampledLineCount, 2);
+  assert.equal(summary.severityCounts.error, 1);
+  assert.equal(summary.severityCounts.warning, 1);
+  assert.equal(JSON.stringify(summary).includes("private request path"), false);
 });
 
 test("matches only allowlisted service process names", () => {

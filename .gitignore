@@ -11,3 +11,6 @@ coverage/
 secrets/
 .whatbox-mcp/
 
+# Local machine-specific Claude Code settings (permissions, paths).
+.claude/settings.local.json
+

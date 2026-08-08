@@ -1,6 +1,6 @@
 {
   "name": "whatbox-mcp",
-  "version": "0.8.0",
+  "version": "0.10.0",
   "description": "A security-first MCP server for operating a Whatbox slot.",
   "type": "module",
   "main": "dist/index.js",
@@ -26,6 +26,7 @@
     "check:review": "node --import tsx src/check-review.ts",
     "check:snapshot": "node --import tsx src/check-snapshot.ts",
     "check:torrent-clients": "node --import tsx src/check-torrent-clients.ts",
+    "check:website-diagnostics": "node --import tsx src/check-website-diagnostics.ts",
     "check:website": "node --import tsx src/check-website.ts",
     "dev": "node --import tsx src/index.ts",
     "start": "node dist/index.js",

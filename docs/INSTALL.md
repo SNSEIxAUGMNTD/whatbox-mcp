@@ -4,6 +4,9 @@ This guide installs Whatbox MCP as a local stdio server. The MCP client starts
 the process on your computer; credentials stay outside the repository and are
 used only for the owner-authorized Whatbox slot you configure.
 
+After installation, use the [Startup Guide](STARTUP.md) for the exact commands
+to run after restarting the computer or opening a new terminal.
+
 ## Requirements
 
 - macOS, Linux, or Windows with WSL;
@@ -92,6 +95,7 @@ Configuration variables:
 | `WHATBOX_HOST_FINGERPRINT_SHA256` | Pinned verified host fingerprint |
 | `WHATBOX_ALLOWED_ROOTS` | Comma-separated absolute remote roots |
 | `WHATBOX_WEBSITE_SOURCE_ROOTS` | Optional comma-separated local static-site roots |
+| `WHATBOX_WEBSITE_HEALTH_PORT` | Optional userland Nginx port; probed only through `127.0.0.1` without a response body |
 
 Use the narrowest allowed roots possible. Filesystem root `/` is rejected.
 See [Local Configuration](LOCAL_CONFIGURATION.md) for the full policy.
@@ -108,6 +112,7 @@ npm run check:storage
 npm run check:directory
 npm run check:services
 npm run check:website
+npm run check:website-diagnostics
 npm run check:snapshot
 ```
 
@@ -123,8 +128,11 @@ Using the Codex CLI, replace the example path with the absolute built path:
 
 ```bash
 codex mcp add whatbox -- node /absolute/path/to/whatbox-mcp/dist/index.js
-codex mcp list
+codex mcp get whatbox
 ```
+
+Run `codex mcp add` once. During normal use, Codex launches the registered
+`stdio` process automatically; do not run `npm start` in a separate terminal.
 
 In the ChatGPT desktop app, open **Settings → MCP servers → Add server**,
 choose **STDIO**, and use:
@@ -136,6 +144,8 @@ choose **STDIO**, and use:
 Save, restart the client, and use `/mcp` to inspect the connection. Local
 configuration remains in `~/.config/whatbox-mcp/local.env`; do not copy it into
 the MCP client configuration.
+
+Continue with [Start after restarting a Mac](STARTUP.md#start-after-restarting-a-mac).
 
 Official reference: [OpenAI MCP documentation](https://developers.openai.com/codex/mcp/).
 
@@ -178,7 +188,7 @@ configuration itself and checks its file permissions.
 After connecting, ask the client to:
 
 1. read `whatbox://guide/agent-operations`;
-2. call `server_info` and confirm version `0.8.0`;
+2. call `server_info` and confirm version `0.10.0`;
 3. call `list_capabilities`;
 4. call `whatbox_configuration_status`;
 5. call `whatbox_operational_snapshot` if configuration is ready.
@@ -239,5 +249,9 @@ timeout failures are intentionally reported without raw error text.
 
 ### A write operation is requested
 
-Stop. Version `0.8.0` has no enabled remote mutation tool. The deployment-plan
-tool creates a signed preview only and returns `executionEnabled: false`.
+Mutations are disabled unless `WHATBOX_MUTATIONS_ENABLED=true` is set in the
+private local configuration. When enabled, reversible actions run after a signed
+plan is created and destructive actions (delete, purge, service stop/restart,
+website rollback, torrent remove) additionally require explicit human approval
+through the MCP client — a model-supplied confirmation is never sufficient. See
+[Getting Started](GETTING_STARTED.md) and [HOTSHEET.md](HOTSHEET.md).

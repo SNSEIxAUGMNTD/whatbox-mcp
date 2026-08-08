@@ -5,6 +5,7 @@ import { Client, type ConnectConfig, type SFTPWrapper } from "ssh2";
 import type { WhatboxConfig } from "./config.js";
 
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
+const MAX_ERROR_LOG_SAMPLE_BYTES = 32 * 1024;
 
 export type ConnectionFailure =
   | "agent_unavailable"
@@ -278,6 +279,56 @@ export interface WebsiteReadiness {
   }>;
 }
 
+export type NginxConfigurationTestState =
+  | "valid"
+  | "invalid"
+  | "unavailable"
+  | "symlink_rejected";
+
+export type WebsiteHealthProbeState =
+  | "responding"
+  | "server_error"
+  | "unreachable"
+  | "probe_unavailable"
+  | "not_configured";
+
+export interface WebsiteDiagnostics {
+  observations: {
+    nginxConfigurationTest: NginxConfigurationTestState;
+    healthProbe: {
+      state: WebsiteHealthProbeState;
+      statusCode?: number;
+      latencyMs?: number;
+    };
+    recentErrorLog: {
+      state: "available" | "unavailable" | "symlink_rejected";
+      sizeBytes?: number;
+      modifiedAt?: string;
+      sampledBytes: number;
+      sampledLineCount: number;
+      severityCounts: {
+        emergency: number;
+        alert: number;
+        critical: number;
+        error: number;
+        warning: number;
+        notice: number;
+        info: number;
+        debug: number;
+      };
+    };
+  };
+  recommendations: Array<{
+    id: string;
+    recommendation: string;
+  }>;
+  contentReturned: {
+    nginxConfiguration: false;
+    responseBody: false;
+    logLines: false;
+  };
+}
+
 export function createHostVerifier(expectedFingerprint: string) {
   const expected = expectedFingerprint
     .replace(/^SHA256:/, "")
@@ -296,6 +347,24 @@ export function createHostVerifier(expectedFingerprint: string) {
   };
 }
 
+/**
+ * Resolve the SSH agent endpoint. Honors SSH_AUTH_SOCK when set (macOS, Linux,
+ * WSL, and Windows setups that export it); otherwise falls back to the Windows
+ * OpenSSH Agent named pipe so native Windows works without extra configuration.
+ */
+export function resolveAgentSocket(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string | undefined {
+  if (env.SSH_AUTH_SOCK) {
+    return env.SSH_AUTH_SOCK;
+  }
+  if (platform === "win32") {
+    return "\\\\.\\pipe\\openssh-ssh-agent";
+  }
+  return undefined;
+}
+
 function buildConnectConfig(config: WhatboxConfig): ConnectConfig {
   const connection: ConnectConfig = {
     host: config.host,
@@ -312,10 +381,11 @@ function buildConnectConfig(config: WhatboxConfig): ConnectConfig {
   };
 
   if (config.authMode === "agent") {
-    if (!process.env.SSH_AUTH_SOCK) {
+    const agentSocket = resolveAgentSocket();
+    if (!agentSocket) {
       throw new WhatboxConnectionError("agent_unavailable");
     }
-    connection.agent = process.env.SSH_AUTH_SOCK;
+    connection.agent = agentSocket;
   } else {
     if (!config.sshKeyPath) {
       throw new WhatboxConnectionError("key_unavailable");
@@ -390,7 +460,7 @@ export function connectWhatbox(config: WhatboxConfig): Promise<Client> {
   });
 }
 
-function openSftp(client: Client): Promise<SFTPWrapper> {
+export function openSftp(client: Client): Promise<SFTPWrapper> {
   return new Promise((resolve, reject) => {
     client.sftp((error, sftp) => {
       if (error) {
@@ -402,7 +472,7 @@ function openSftp(client: Client): Promise<SFTPWrapper> {
   });
 }
 
-function realpath(sftp: SFTPWrapper, remotePath: string): Promise<string> {
+export function realpath(sftp: SFTPWrapper, remotePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     sftp.realpath(remotePath, (error, resolvedPath) => {
       if (error) {
@@ -414,7 +484,7 @@ function realpath(sftp: SFTPWrapper, remotePath: string): Promise<string> {
   });
 }
 
-function isWithinRoot(root: string, candidate: string) {
+export function isWithinRoot(root: string, candidate: string) {
   return candidate === root || candidate.startsWith(`${root}/`);
 }
 
@@ -470,6 +540,9 @@ export async function listWhatboxDirectory(
   }
 
   const candidate = resolveAllowedPath(root, relativePath);
+  if (isSensitiveDirectoryPath(candidate)) {
+    throw new Error("Sensitive directories cannot be listed");
+  }
   const sftp = await openSftp(client);
 
   try {
@@ -478,6 +551,9 @@ export async function listWhatboxDirectory(
 
     if (!isWithinRoot(canonicalRoot, canonicalCandidate)) {
       throw new Error("Resolved directory path escapes its allowed root");
+    }
+    if (isSensitiveDirectoryPath(canonicalCandidate)) {
+      throw new Error("Sensitive directories cannot be listed");
     }
 
     const entries = await readDirectory(sftp, canonicalCandidate);
@@ -647,18 +723,23 @@ export async function mapWhatboxDirectory(
   }
 }
 
-function quotePosixShell(value: string) {
+export function quotePosixShell(value: string) {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-function executeFixedReadOnlyQuery(
+/**
+ * Run a fixed, server-authored command and return bounded output plus the
+ * exit code. Callers never supply command strings; every caller passes a
+ * fixed template with `quotePosixShell`-escaped configured values.
+ */
+export function executeFixedCommandWithStatus(
   client: Client,
   command: string
-): Promise<string> {
+): Promise<{ code: number; output: string }> {
   return new Promise((resolve, reject) => {
     client.exec(command, (error, stream) => {
       if (error) {
-        reject(new Error("Unable to run the fixed read-only query"));
+        reject(new Error("Unable to run the fixed command"));
         return;
       }
 
@@ -676,15 +757,32 @@ function executeFixedReadOnlyQuery(
         output.push(chunk);
       });
       stream.on("close", (code: number | undefined) => {
-        if (failed || code !== 0) {
-          reject(new Error("The fixed read-only query failed"));
+        if (failed) {
+          reject(new Error("The fixed command produced excessive output"));
           return;
         }
-        resolve(Buffer.concat(output).toString("utf8"));
+        resolve({
+          code: typeof code === "number" ? code : -1,
+          output: Buffer.concat(output).toString("utf8")
+        });
       });
       stream.stderr.resume();
     });
   });
+}
+
+function executeFixedReadOnlyQuery(
+  client: Client,
+  command: string
+): Promise<string> {
+  return executeFixedCommandWithStatus(client, command).then(
+    ({ code, output }) => {
+      if (code !== 0) {
+        throw new Error("The fixed read-only query failed");
+      }
+      return output;
+    }
+  );
 }
 
 export function parseDfOutput(output: string, rootIndex: number, rootPath: string) {
@@ -869,7 +967,7 @@ const SERVICE_DEFINITIONS: ServiceDefinition[] = [
     service: "php-fpm",
     category: "web",
     processNames: ["php-fpm", "php-fpm8.2", "php-fpm8.3", "php-fpm8.4"],
-    configPaths: [".config/php", ".config/php-fpm"]
+    configPaths: [".config/php-fpm2", ".config/php", ".config/php-fpm"]
   }
 ];
 
@@ -884,6 +982,105 @@ function remoteDirectoryExists(sftp: SFTPWrapper, remotePath: string) {
     sftp.lstat(remotePath, (error, attributes) =>
       resolve(!error && Boolean(attributes?.isDirectory()))
     );
+  });
+}
+
+type RemoteFileState = "available" | "unavailable" | "symlink_rejected";
+
+function remoteRegularFileState(
+  sftp: SFTPWrapper,
+  remotePath: string
+): Promise<RemoteFileState> {
+  return new Promise((resolve) => {
+    sftp.lstat(remotePath, (error, attributes) => {
+      if (error || !attributes) {
+        resolve("unavailable");
+        return;
+      }
+      if (attributes.isSymbolicLink()) {
+        resolve("symlink_rejected");
+        return;
+      }
+      resolve(attributes.isFile() ? "available" : "unavailable");
+    });
+  });
+}
+
+interface RemoteFileTail {
+  state: RemoteFileState;
+  sizeBytes?: number;
+  modifiedAt?: string;
+  content: string;
+}
+
+function readRemoteRegularFileTail(
+  sftp: SFTPWrapper,
+  remotePath: string,
+  maxBytes: number
+): Promise<RemoteFileTail> {
+  return new Promise((resolve) => {
+    sftp.lstat(remotePath, (lstatError, attributes) => {
+      if (lstatError || !attributes) {
+        resolve({ state: "unavailable", content: "" });
+        return;
+      }
+      if (attributes.isSymbolicLink()) {
+        resolve({ state: "symlink_rejected", content: "" });
+        return;
+      }
+      if (!attributes.isFile()) {
+        resolve({ state: "unavailable", content: "" });
+        return;
+      }
+
+      sftp.open(remotePath, "r", (openError, handle) => {
+        if (openError) {
+          resolve({ state: "unavailable", content: "" });
+          return;
+        }
+
+        const finish = (result: RemoteFileTail) => {
+          sftp.close(handle, () => resolve(result));
+        };
+
+        sftp.fstat(handle, (statError, stats) => {
+          if (statError || !stats?.isFile()) {
+            finish({ state: "unavailable", content: "" });
+            return;
+          }
+
+          const length = Math.min(stats.size, maxBytes);
+          const baseResult = {
+            state: "available" as const,
+            sizeBytes: stats.size,
+            modifiedAt: new Date(stats.mtime * 1000).toISOString()
+          };
+          if (length === 0) {
+            finish({ ...baseResult, content: "" });
+            return;
+          }
+
+          const buffer = Buffer.alloc(length);
+          sftp.read(
+            handle,
+            buffer,
+            0,
+            length,
+            Math.max(0, stats.size - length),
+            (readError, bytesRead) => {
+              if (readError) {
+                finish({ state: "unavailable", content: "" });
+                return;
+              }
+              finish({
+                ...baseResult,
+                content: buffer.subarray(0, bytesRead).toString("utf8")
+              });
+            }
+          );
+        });
+      });
+    });
   });
 }
 
@@ -948,6 +1145,87 @@ export async function getWhatboxServiceInventory(
 
 export function parseNginxBinaryAvailability(output: string) {
   return output.trim() === "available";
+}
+
+export function parseNginxConfigurationTest(
+  output: string
+): Exclude<NginxConfigurationTestState, "symlink_rejected"> {
+  const value = output.trim();
+  return value === "valid" || value === "invalid" ? value : "unavailable";
+}
+
+export function parseWebsiteHealthProbe(output: string): {
+  state: WebsiteHealthProbeState;
+  statusCode?: number;
+  latencyMs?: number;
+} {
+  const value = output.trim();
+  if (value === "unreachable") {
+    return { state: "unreachable" };
+  }
+  if (value === "unavailable") {
+    return { state: "probe_unavailable" };
+  }
+
+  const match = /^response (\d{3}) (\d+(?:\.\d+)?)$/.exec(value);
+  if (!match) {
+    return { state: "probe_unavailable" };
+  }
+
+  const statusCode = Number.parseInt(match[1], 10);
+  const latencyMs = Math.round(Number.parseFloat(match[2]) * 1000);
+  if (statusCode < 100 || statusCode > 599 || !Number.isFinite(latencyMs)) {
+    return { state: "probe_unavailable" };
+  }
+
+  return {
+    state: statusCode >= 500 ? "server_error" : "responding",
+    statusCode,
+    latencyMs
+  };
+}
+
+export function summarizeNginxErrorLog(content: string) {
+  const severityCounts = {
+    emergency: 0,
+    alert: 0,
+    critical: 0,
+    error: 0,
+    warning: 0,
+    notice: 0,
+    info: 0,
+    debug: 0
+  };
+  const severityNames = {
+    emerg: "emergency",
+    alert: "alert",
+    crit: "critical",
+    error: "error",
+    warn: "warning",
+    notice: "notice",
+    info: "info",
+    debug: "debug"
+  } as const;
+  const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+
+  for (const line of lines) {
+    const match = /\[(emerg|alert|crit|error|warn|notice|info|debug)\]/i.exec(
+      line
+    );
+    if (!match) {
+      continue;
+    }
+    const severity = severityNames[
+      match[1].toLowerCase() as keyof typeof severityNames
+    ];
+    severityCounts[severity] += 1;
+  }
+
+  return {
+    sampledBytes: Buffer.byteLength(content),
+    sampledLineCount: lines.length,
+    severityCounts
+  };
 }
 
 const WEBSITE_ROOT_CANDIDATES = [
@@ -1056,6 +1334,138 @@ export async function getWhatboxWebsiteReadiness(
   } finally {
     sftp.end();
   }
+}
+
+export async function getWhatboxWebsiteDiagnostics(
+  client: Client,
+  config: WhatboxConfig
+): Promise<WebsiteDiagnostics> {
+  const home = `/home/${config.username}`;
+  const nginxConfigPath = posix.join(home, ".config/nginx/nginx.conf");
+  const nginxErrorLogPath = posix.join(home, ".config/nginx/error.log");
+  const sftp = await openSftp(client);
+  let configFileState: RemoteFileState;
+  let errorLogTail: RemoteFileTail;
+
+  try {
+    [configFileState, errorLogTail] = await Promise.all([
+      remoteRegularFileState(sftp, nginxConfigPath),
+      readRemoteRegularFileTail(
+        sftp,
+        nginxErrorLogPath,
+        MAX_ERROR_LOG_SAMPLE_BYTES
+      )
+    ]);
+  } finally {
+    sftp.end();
+  }
+
+  let nginxConfigurationTest: NginxConfigurationTestState;
+  if (configFileState === "symlink_rejected") {
+    nginxConfigurationTest = "symlink_rejected";
+  } else if (configFileState === "available") {
+    const output = await executeFixedReadOnlyQuery(
+      client,
+      `if [ ! -x /usr/sbin/nginx ]; then printf 'unavailable\\n'; elif /usr/sbin/nginx -t -q -c ${quotePosixShell(nginxConfigPath)} >/dev/null 2>&1; then printf 'valid\\n'; else printf 'invalid\\n'; fi`
+    );
+    nginxConfigurationTest = parseNginxConfigurationTest(output);
+  } else {
+    nginxConfigurationTest = "unavailable";
+  }
+
+  const healthProbe = config.websiteHealthPort
+    ? parseWebsiteHealthProbe(
+        await executeFixedReadOnlyQuery(
+          client,
+          `if [ ! -x /usr/bin/curl ]; then printf 'unavailable\\n'; else result=$(/usr/bin/curl --silent --show-error --output /dev/null --max-time 5 --write-out '%{http_code} %{time_total}' ${quotePosixShell(`http://127.0.0.1:${config.websiteHealthPort}/`)} 2>/dev/null) && printf 'response %s\\n' "$result" || printf 'unreachable\\n'; fi`
+        )
+      )
+    : { state: "not_configured" as const };
+
+  const errorSummary = summarizeNginxErrorLog(errorLogTail.content);
+  const recentErrorLog = {
+    state: errorLogTail.state,
+    ...(errorLogTail.sizeBytes === undefined
+      ? {}
+      : { sizeBytes: errorLogTail.sizeBytes }),
+    ...(errorLogTail.modifiedAt === undefined
+      ? {}
+      : { modifiedAt: errorLogTail.modifiedAt }),
+    ...errorSummary
+  };
+  const recommendations: WebsiteDiagnostics["recommendations"] = [];
+
+  if (nginxConfigurationTest === "invalid") {
+    recommendations.push({
+      id: "nginx-configuration-invalid",
+      recommendation:
+        "Correct the userland Nginx configuration before staging or activating a website release."
+    });
+  } else if (nginxConfigurationTest === "unavailable") {
+    recommendations.push({
+      id: "nginx-configuration-test-unavailable",
+      recommendation:
+        "Confirm the fixed userland Nginx binary and regular configuration file before deployment."
+    });
+  } else if (nginxConfigurationTest === "symlink_rejected") {
+    recommendations.push({
+      id: "nginx-configuration-symlink-rejected",
+      recommendation:
+        "Replace the Nginx configuration symlink with an explicitly reviewed regular file before diagnostics or deployment."
+    });
+  }
+
+  if (healthProbe.state === "not_configured") {
+    recommendations.push({
+      id: "website-health-probe-not-configured",
+      recommendation:
+        "Configure a loopback-only website health port before enabling deployment execution."
+    });
+  } else if (healthProbe.state === "unreachable") {
+    recommendations.push({
+      id: "website-health-probe-unreachable",
+      recommendation:
+        "Confirm the Nginx process and configured loopback port before treating the website as reachable."
+    });
+  } else if (healthProbe.state === "server_error") {
+    recommendations.push({
+      id: "website-health-probe-server-error",
+      recommendation:
+        "Investigate the HTTP 5xx response before deployment activation."
+    });
+  } else if (healthProbe.state === "probe_unavailable") {
+    recommendations.push({
+      id: "website-health-probe-unavailable",
+      recommendation:
+        "Confirm the fixed loopback probe is available before enabling deployment execution."
+    });
+  }
+
+  const highSeverityCount = errorSummary.severityCounts.emergency
+    + errorSummary.severityCounts.alert
+    + errorSummary.severityCounts.critical
+    + errorSummary.severityCounts.error;
+  if (highSeverityCount > 0) {
+    recommendations.push({
+      id: "nginx-recent-errors-detected",
+      recommendation:
+        "Review the Nginx error log locally before deployment; the MCP intentionally returns counts, not log lines."
+    });
+  }
+
+  return {
+    observations: {
+      nginxConfigurationTest,
+      healthProbe,
+      recentErrorLog
+    },
+    recommendations,
+    contentReturned: {
+      nginxConfiguration: false,
+      responseBody: false,
+      logLines: false
+    }
+  };
 }
 
 export function reviewWhatboxConfiguration(

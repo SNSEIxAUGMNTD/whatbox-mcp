@@ -20,38 +20,45 @@ test("reports non-sensitive local server metadata", () => {
   });
 });
 
-test("starts with no remote mutation capabilities", () => {
+test("advertises read-only and gated mutation capabilities", () => {
   const capabilities = getCapabilities();
 
-  assert.deepEqual(capabilities.availableNow, [
+  for (const tool of [
     "server_info",
-    "list_capabilities",
-    "whatbox_configuration_status",
-    "whatbox_connection_status",
-    "whatbox_storage_status",
-    "whatbox_list_directory",
-    "whatbox_torrent_clients_status",
-    "whatbox_structure_map",
-    "whatbox_services_status",
-    "whatbox_configuration_review",
-    "whatbox_website_readiness",
-    "whatbox_website_deployment_plan",
-    "whatbox_operational_snapshot"
-  ]);
+    "whatbox_operational_snapshot",
+    "whatbox_list_tools",
+    "whatbox_upload_path",
+    "whatbox_quarantine_path",
+    "whatbox_purge_quarantine",
+    "whatbox_backup_configuration",
+    "whatbox_service_control",
+    "whatbox_website_deploy_execute",
+    "whatbox_torrent_remove"
+  ]) {
+    assert.ok(
+      capabilities.availableNow.includes(tool),
+      `expected ${tool} to be advertised`
+    );
+  }
   assert.equal(
     capabilities.agentInterfaces.preferredAssessmentTool,
     "whatbox_operational_snapshot"
   );
   assert.deepEqual(capabilities.agentInterfaces.prompts, ["whatbox_safe_audit"]);
-  assert.ok(capabilities.criticalNext.some((item) => item.includes("input_required")));
+  assert.ok(
+    capabilities.agentInterfaces.resources.includes("whatbox://guide/tools")
+  );
   assert.match(capabilities.safetyModel[0], /No generic remote shell tool/);
   assert.ok(
     capabilities.safetyModel.some((item) =>
-      item.includes("external human approval")
+      item.includes("Mutations are disabled unless")
     )
   );
   assert.ok(
     capabilities.safetyModel.some((item) => item.includes("quarantines data"))
+  );
+  assert.ok(
+    capabilities.safetyModel.some((item) => item.includes("audit log"))
   );
 });
 

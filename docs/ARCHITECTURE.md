@@ -67,7 +67,7 @@ validation, health checks, logs with redaction, rollback, and start/restart
 operations. DNS records and Whatbox managed links remain explicit external
 steps unless a separately authorized provider integration is configured.
 
-The first website phase is readiness-only. Its fixed probes check Nginx binary
+The website observation phase is read-only. Its fixed probes check Nginx binary
 availability, known userland configuration-location existence, allowlisted
 process state, candidate website-root directory existence below configured
 allowed roots, and storage headroom. It returns observations separately from
@@ -75,6 +75,13 @@ recommendations, does not read configuration contents, and does not infer
 health from process state. Static deployment remains disabled until its local
 source allowlist, atomic release, validation, health-check, rollback, and
 approval design are implemented and live-validated.
+
+The bounded diagnostics adapter adds a fixed `/usr/sbin/nginx -t` syntax test,
+an optional `/usr/bin/curl` probe to a locally configured loopback port, and a
+32 KiB tail sample used only to count Nginx error severities. It rejects
+symlinked configuration and log files and never returns configuration text,
+HTTP response bodies, or log lines. The same primitives can support future
+pre-activation and post-activation checks, but they grant no mutation authority.
 
 The static deployment design is:
 

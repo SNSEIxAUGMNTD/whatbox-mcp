@@ -14,12 +14,16 @@ import {
 import {
   AGENT_GUIDE,
   buildOperationalSnapshot,
-  toSafeStorageStatus
+  renderToolCatalogMarkdown,
+  toSafeStorageStatus,
+  TOOL_CATALOG
 } from "./agent.js";
+import { registerMutationTools } from "./server-mutations.js";
 import {
   getWhatboxStorageStatus,
   getWhatboxServiceInventory,
   getWhatboxTorrentClientStatus,
+  getWhatboxWebsiteDiagnostics,
   getWhatboxWebsiteReadiness,
   listWhatboxDirectory,
   mapWhatboxDirectory,
@@ -29,7 +33,7 @@ import {
 } from "./whatbox.js";
 
 export const SERVER_NAME = "whatbox-mcp";
-export const SERVER_VERSION = "0.8.0";
+export const SERVER_VERSION = "0.10.0";
 
 const READ_ONLY_TOOL_ANNOTATIONS = {
   readOnlyHint: true,
@@ -101,6 +105,54 @@ const websiteReadinessOutputSchema = z.object({
   }))
 });
 
+const websiteDiagnosticsOutputSchema = z.object({
+  observations: z.object({
+    nginxConfigurationTest: z.enum([
+      "valid",
+      "invalid",
+      "unavailable",
+      "symlink_rejected"
+    ]),
+    healthProbe: z.object({
+      state: z.enum([
+        "responding",
+        "server_error",
+        "unreachable",
+        "probe_unavailable",
+        "not_configured"
+      ]),
+      statusCode: z.number().int().min(100).max(599).optional(),
+      latencyMs: z.number().int().nonnegative().optional()
+    }),
+    recentErrorLog: z.object({
+      state: z.enum(["available", "unavailable", "symlink_rejected"]),
+      sizeBytes: z.number().nonnegative().optional(),
+      modifiedAt: z.string().optional(),
+      sampledBytes: z.number().int().nonnegative(),
+      sampledLineCount: z.number().int().nonnegative(),
+      severityCounts: z.object({
+        emergency: z.number().int().nonnegative(),
+        alert: z.number().int().nonnegative(),
+        critical: z.number().int().nonnegative(),
+        error: z.number().int().nonnegative(),
+        warning: z.number().int().nonnegative(),
+        notice: z.number().int().nonnegative(),
+        info: z.number().int().nonnegative(),
+        debug: z.number().int().nonnegative()
+      })
+    })
+  }),
+  recommendations: z.array(z.object({
+    id: z.string(),
+    recommendation: z.string()
+  })),
+  contentReturned: z.object({
+    nginxConfiguration: z.literal(false),
+    responseBody: z.literal(false),
+    logLines: z.literal(false)
+  })
+});
+
 export function getServerInfo() {
   return {
     name: SERVER_NAME,
@@ -118,6 +170,7 @@ export function getCapabilities() {
     availableNow: [
       "server_info",
       "list_capabilities",
+      "whatbox_list_tools",
       "whatbox_configuration_status",
       "whatbox_connection_status",
       "whatbox_storage_status",
@@ -127,13 +180,29 @@ export function getCapabilities() {
       "whatbox_services_status",
       "whatbox_configuration_review",
       "whatbox_website_readiness",
+      "whatbox_website_diagnostics",
       "whatbox_website_deployment_plan",
-      "whatbox_operational_snapshot"
+      "whatbox_operational_snapshot",
+      "whatbox_upload_path",
+      "whatbox_download_path",
+      "whatbox_move_path",
+      "whatbox_make_directory",
+      "whatbox_quarantine_path",
+      "whatbox_list_quarantine",
+      "whatbox_purge_quarantine",
+      "whatbox_backup_configuration",
+      "whatbox_service_control",
+      "whatbox_website_deploy_execute",
+      "whatbox_website_rollback",
+      "whatbox_torrents_status",
+      "whatbox_torrent_add",
+      "whatbox_torrent_control",
+      "whatbox_torrent_remove"
     ],
     planned: [
       "approval-gated atomic static website deployment with validation, health checking, and rollback",
       "read-only torrent summaries through separately configured supported client APIs",
-      "redacted recent-error and service-health adapters",
+      "service-specific health adapters beyond userland Nginx",
       "approval-gated service lifecycle actions",
       "multiple locally authorized Whatbox connection profiles",
       "optional authorized provider integration for Manage Apps and managed links"
@@ -144,15 +213,22 @@ export function getCapabilities() {
       "atomic activation, bounded health checking, rollback, and redacted audit logging"
     ],
     safetyModel: [
-      "No generic remote shell tool",
-      "Every mutation requires an immutable plan before execution",
-      "Deletion requires one-time external human approval bound to exact canonical targets",
-      "Initial removal quarantines data; permanent purge requires a second approval",
-      "Remote paths are restricted to configured allow-lists",
-      "Sensitive locations and credential-like files are excluded from discovery"
+      "No generic remote shell tool; every command is a fixed server-authored template",
+      "Mutations are disabled unless WHATBOX_MUTATIONS_ENABLED=true in local configuration",
+      "Every mutation requires an immutable HMAC-signed plan before execution",
+      "Destructive mutations always require one-time human approval via MCP elicitation, even in auto-mode; a model-supplied boolean is never sufficient",
+      "Deletion quarantines data; permanent purge requires a separate second approval",
+      "Uploads, moves, and directory creation never overwrite existing paths",
+      "Remote and local free space are checked before transfers and deployments",
+      "Remote paths are restricted to configured allow-lists with canonical-path and symlink containment",
+      "Sensitive locations and credential-like files are excluded from discovery, listing, upload, and backup",
+      "Every planned, requested, approved, denied, executed, and failed mutation is recorded in a local redacted audit log"
     ],
     agentInterfaces: {
-      resources: ["whatbox://guide/agent-operations"],
+      resources: [
+        "whatbox://guide/agent-operations",
+        "whatbox://guide/tools"
+      ],
       prompts: ["whatbox_safe_audit"],
       preferredAssessmentTool: "whatbox_operational_snapshot"
     }
@@ -181,6 +257,70 @@ export function createServer() {
     async (uri) => ({
       contents: [{ uri: uri.href, mimeType: "text/markdown", text: AGENT_GUIDE }]
     })
+  );
+
+  server.registerResource(
+    "whatbox-tools-catalog",
+    "whatbox://guide/tools",
+    {
+      title: "Whatbox MCP Tools and Processes",
+      description:
+        "The full catalog of tools grouped by category and risk, and the current mutation-enabled state.",
+      mimeType: "text/markdown",
+      annotations: { audience: ["assistant", "user"], priority: 1 }
+    },
+    async (uri) => {
+      let mutationsEnabled = false;
+      try {
+        mutationsEnabled = loadConfig().mutationsEnabled;
+      } catch {
+        mutationsEnabled = false;
+      }
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "text/markdown",
+            text: renderToolCatalogMarkdown(mutationsEnabled)
+          }
+        ]
+      };
+    }
+  );
+
+  server.registerTool(
+    "whatbox_list_tools",
+    {
+      title: "List Whatbox MCP Tools and Processes",
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      description:
+        "Return the full tool catalog grouped by category and risk, plus whether remote mutations are currently enabled. Back the /tools command with this.",
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        mutationsEnabled: z.boolean(),
+        tools: z.array(z.object({
+          name: z.string(),
+          title: z.string(),
+          category: z.string(),
+          mutating: z.boolean(),
+          risk: z.enum(["read_only", "reversible", "destructive"]),
+          summary: z.string()
+        }))
+      })
+    },
+    async () => {
+      let mutationsEnabled = false;
+      try {
+        mutationsEnabled = loadConfig().mutationsEnabled;
+      } catch {
+        mutationsEnabled = false;
+      }
+      const result = { mutationsEnabled, tools: TOOL_CATALOG };
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result
+      };
+    }
   );
 
   server.registerPrompt(
@@ -280,6 +420,40 @@ export function createServer() {
             {
               type: "text",
               text: "Unable to read website-hosting readiness. Check the local connection and allowed storage roots."
+            }
+          ]
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "whatbox_website_diagnostics",
+    {
+      title: "Diagnose Userland Nginx Safely",
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      description:
+        "Test fixed userland Nginx configuration syntax, optionally probe a configured loopback port without a response body, and summarize recent error severities without returning configuration or log contents.",
+      inputSchema: z.object({}),
+      outputSchema: websiteDiagnosticsOutputSchema
+    },
+    async () => {
+      try {
+        const config = loadConfig();
+        const result = await withWhatboxClient(config, (client) =>
+          getWhatboxWebsiteDiagnostics(client, config)
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result
+        };
+      } catch {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "Unable to run website diagnostics. Check the local connection, fixed Nginx setup, and optional loopback health port."
             }
           ]
         };
@@ -456,8 +630,8 @@ export function createServer() {
           recommendation: z.string()
         })),
         safety: z.object({
-          remoteMutationsEnabled: z.literal(false),
-          deploymentExecutionEnabled: z.literal(false),
+          remoteMutationsEnabled: z.boolean(),
+          deploymentExecutionEnabled: z.boolean(),
           configurationContentsInspected: z.literal(false)
         })
       })
@@ -472,7 +646,11 @@ export function createServer() {
             getWhatboxWebsiteReadiness(client, config)
           ]);
           const review = reviewWhatboxConfiguration(services, storage);
-          return buildOperationalSnapshot(services, storage, website, review);
+          return buildOperationalSnapshot(services, storage, website, review, {
+            remoteMutationsEnabled: config.mutationsEnabled,
+            deploymentExecutionEnabled: config.mutationsEnabled,
+            configurationContentsInspected: false
+          });
         });
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -838,6 +1016,8 @@ export function createServer() {
       }
     }
   );
+
+  registerMutationTools(server);
 
   return server;
 }

@@ -6,7 +6,7 @@ import {
   realpathSync,
   statSync
 } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { posix, relative, resolve, sep } from "node:path";
 import {
   createMutationPlan,
   createTargetDigest,
@@ -20,8 +20,14 @@ const MAX_RELEASE_ID_BYTES = 64;
 const FORBIDDEN_NAMES = new Set([
   ".git",
   ".gnupg",
+  ".htpasswd",
+  ".netrc",
+  ".npmrc",
   ".ssh",
+  "authorized_keys",
   "credentials",
+  "htpasswd.conf",
+  "known_hosts",
   "node_modules",
   "secrets"
 ]);
@@ -33,11 +39,19 @@ const FORBIDDEN_SUFFIXES = [
   ".pfx"
 ];
 
+export interface WebsiteManifestEntry {
+  relativePath: string;
+  size: number;
+  digest: string;
+}
+
 export interface WebsiteSourceValidation {
   accepted: boolean;
   fileCount: number;
   totalBytes: number;
   manifestDigest: string | null;
+  /** Present only when accepted; never returned in tool output. */
+  manifest: WebsiteManifestEntry[];
   rejectionReasons: Array<
     | "source_not_directory"
     | "source_not_allowlisted"
@@ -65,7 +79,7 @@ function isWithinRoot(root: string, candidate: string) {
   return path === "" || (!path.startsWith(`..${sep}`) && path !== "..");
 }
 
-function isSensitiveName(name: string) {
+export function isSensitiveName(name: string) {
   const lowerName = name.toLowerCase();
   return (
     FORBIDDEN_NAMES.has(lowerName)
@@ -172,6 +186,7 @@ export function validateStaticSiteSource(
     fileCount: manifest.length,
     totalBytes,
     manifestDigest: reasons.length === 0 ? hashManifest(manifest) : null,
+    manifest: reasons.length === 0 ? manifest : [],
     rejectionReasons: reasons
   };
 }
@@ -185,9 +200,9 @@ export function resolveWebsiteReleaseTarget(remoteWebsiteRoot: string, releaseId
     throw new Error("Website release identifier is invalid");
   }
 
-  const root = resolve(remoteWebsiteRoot);
-  const target = resolve(root, ".whatbox-releases", releaseId);
-  if (!isWithinRoot(root, target)) {
+  const root = posix.resolve(remoteWebsiteRoot);
+  const target = posix.resolve(root, ".whatbox-releases", releaseId);
+  if (target !== root && !target.startsWith(`${root}/`)) {
     throw new Error("Website release target escapes its allowed root");
   }
   return target;

@@ -1,26 +1,43 @@
-# Codex CLI Handoff
+# Coding-Agent Handoff
 
 ## Repository
 
 - Working directory: the repository root containing this document
 - Package: `whatbox-mcp`
-- Current version: `0.8.0`
+- Current version: `0.10.0`
 - Runtime: Node.js 20 or newer, TypeScript, ESM
 - Transport: local MCP stdio
-- Git is initialized, but the current project files are untracked and there is
-  no baseline commit. Preserve the entire working tree.
+- Baseline commit: `f0c95db` on `main`. Inspect `git status` before editing and
+  preserve all working-tree changes made after that commit.
+
+## 0.10.0 update
+
+The approval-gated mutation phase is now implemented and registered. The gate
+(`src/mutation.ts`) uses the SDK `inputRequired`/`acceptedContent` flow with the
+sealed plan carried as `requestState`; mutation primitives live in
+`src/whatbox-mutations.ts` (files, quarantine/purge, backup, service control,
+website deploy/rollback) and `src/torrent.ts` (loopback RPC). All are gated
+behind `WHATBOX_MUTATIONS_ENABLED` and registered in `src/server-mutations.ts`.
+Destructive actions require human elicitation; denial-path tests are in
+`src/mutation.test.ts`. The sections below describe the original read-only
+baseline and remain accurate for those tools.
 
 ## Transfer status
 
-The read-only website-readiness phase is implemented. The current continuation
-also adds local-only static-site source validation and deployment-plan
-primitives in `src/website.ts`; these do not connect to Whatbox, transfer
-files, change remote state, or register a deployment tool.
+The read-only website-readiness and diagnostics phases are implemented. The
+current continuation also adds local-only static-site source validation and
+deployment-plan primitives in `src/website.ts`; these do not connect to
+Whatbox, transfer files, change remote state, or register a deployment tool.
 
 The current branch also adds agent-facing output schemas, readable tool titles,
 a consolidated operational snapshot, an MCP agent-guide resource, a safe-audit
 prompt, and path-redacted storage results. Re-run the validation commands after
 any further edits.
+
+Version `0.9.0` also adds `whatbox_website_diagnostics`: a fixed Nginx syntax
+test, optional body-free loopback probe, and bounded recent-error severity
+summary. It never returns Nginx configuration text, HTTP response bodies, or
+log lines.
 
 ## Secret policy
 
@@ -34,9 +51,12 @@ tokens, cookies, or connection strings.
 - Approval key: `~/.local/state/whatbox-mcp/approval.key` (`0600`)
 - Do not open or display either private file. Run only sanitized checks.
 
-The private Whatbox connection has already passed configuration, connection,
+The private Whatbox connection previously passed configuration, connection,
 storage, SFTP directory, structure-map, torrent-client, service-inventory, and
-configuration-review acceptance checks.
+configuration-review acceptance checks in the user's earlier shell session.
+Do not infer that the receiving agent currently has the same SSH-agent state.
+For operator startup, use `docs/STARTUP.md`; do not request private values or
+replace its sanitized workflow with raw SSH debugging.
 
 ## Implemented tools
 
@@ -51,6 +71,7 @@ configuration-review acceptance checks.
 - `whatbox_services_status`
 - `whatbox_configuration_review`
 - `whatbox_website_readiness`
+- `whatbox_website_diagnostics`
 - `whatbox_website_deployment_plan`
 - `whatbox_operational_snapshot`
 
@@ -98,6 +119,8 @@ contents.
 - Raw connection errors and configuration values are never returned
 - Configured remote storage-root paths are removed from agent-facing storage
   results
+- Nginx diagnostics reject symlinked config/log files, use fixed executable
+  paths, and return no configuration text, HTTP body, or log lines
 - Architecture and deletion policy are in `docs/ARCHITECTURE.md` and
   `SECURITY.md`
 
@@ -137,8 +160,9 @@ Finish the static-site mutation phase conservatively, in this order:
 
 1. Implement fixed remote staging and manifest validation through SFTP only;
    no generic shell or caller-supplied command strings.
-2. Add atomic release activation, fixed `nginx -t` validation, bounded health
-   checking, and rollback while keeping all writes behind an unregistered
+2. Reuse the read-only diagnostics primitives for pre-activation Nginx
+   validation and post-activation loopback checking; add atomic release
+   activation and rollback while keeping all writes behind an unregistered
    internal adapter until approval is complete.
 3. Integrate the installed SDK's negotiated `input_required` flow using
    signed request state, `acceptedContent`, and fail-closed client capability
@@ -167,30 +191,45 @@ npm test
 npm run build
 ```
 
-Current local validation: typecheck passes, 34 tests pass, and production
-build passes after the `src/website.ts` increment. Re-run all three checks
+Current local validation: typecheck passes, 38 tests pass, and production
+build passes after the website-diagnostics increment. Re-run all three checks
 before treating any further continuation as validated.
 Use `node --import tsx` for local TypeScript scripts, matching existing npm
 scripts.
 
 For live checks, never print private configuration or raw SSH debug output.
 The user may share only the sanitized JSON emitted by repository check scripts.
-The last sanitized `npm run check:website` attempt returned
-`dns_resolution_failed` at `dns_resolution`; this is an environmental live
-check result, not evidence that website readiness is healthy or unhealthy.
-The current `npm run check:snapshot` attempt returned the same sanitized
-failure and stage without exposing configuration values.
+The latest `npm run check:website-diagnostics` attempt from the Codex execution
+environment returned `authentication_failed` at `authentication`. This proves
+neither that the Nginx diagnostics passed nor that the private configuration is
+wrong; the receiving agent must re-establish its own authorized SSH-agent
+session and rerun the sanitized check.
 
 ## Receiving-agent checklist
+
+First confirm that the human operator has loaded the dedicated identity as
+described in `docs/STARTUP.md`. Do not ask for the key, passphrase, agent socket,
+or configuration values.
 
 ```bash
 npm run typecheck
 npm test
 npm run build
 npm run check:website
+npm run check:website-diagnostics
 npm run check:snapshot
 ```
 
 If the live check fails, report only the JSON fields emitted by the script.
 Never inspect or print `~/.config/whatbox-mcp/local.env` or
 `~/.local/state/whatbox-mcp/approval.key`.
+
+## Claude Code continuation prompt
+
+Use this document as the source of truth. Start by running `git status`, then
+read `README.md`, `SECURITY.md`, `docs/ARCHITECTURE.md`, and the relevant source
+and tests. Preserve the read-only boundary and all existing working-tree
+changes. Implement only the next bounded internal deployment primitive, keep
+it unregistered until negotiated approval and denial-path coverage exist, and
+finish by running the validation checklist above without opening either
+private local file.

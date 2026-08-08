@@ -1,16 +1,30 @@
+<p align="center">
+  <img src="assets/whatbox-mcp-banner.svg" alt="Whatbox MCP — security-first control for your Whatbox slot" width="100%">
+</p>
+
 # Whatbox MCP
 
 [![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-local%20stdio-5C5CFF)](https://modelcontextprotocol.io/)
+[![Version](https://img.shields.io/badge/version-0.10.0-12866f)](package.json)
+[![Tests](https://img.shields.io/badge/tests-53%20passing-2ea043)](src)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A security-first Model Context Protocol server that gives AI agents bounded,
 structured access to an owner-authorized Whatbox slot.
 
 Whatbox MCP can inspect storage, directories, supported services, torrent-client
-process state, directory topology, configuration metadata, and website-hosting
-readiness. It also validates local static-site sources and creates signed,
-short-lived deployment-plan previews. Remote mutations are currently disabled.
+process state, directory topology, configuration metadata, website-hosting
+readiness, and bounded userland Nginx diagnostics. It also validates local
+static-site sources and creates signed, short-lived deployment-plan previews.
+
+As of `0.10.0` it can additionally perform **approval-gated mutations** —
+upload, download, move, mkdir, quarantine-based delete and second-approval
+purge, configuration backup, service start/stop/restart, atomic website
+deployment with rollback, and torrent add/control/remove over an SSH loopback
+tunnel. Mutations are **disabled by default** and every destructive action
+requires explicit human approval through the MCP protocol, even when an agent
+runs unattended.
 
 The server runs locally over MCP stdio. Credentials remain outside the
 repository and are never accepted as tool arguments.
@@ -31,7 +45,7 @@ clear and mechanically enforced. This server is designed around four rules:
 
 ## Current release
 
-Version `0.8.0` includes:
+Version `0.10.0` includes everything from the read-only line —
 
 - a local MCP stdio server for Node.js 20+;
 - pinned SSH host verification and SSH-agent authentication;
@@ -39,14 +53,28 @@ Version `0.8.0` includes:
 - fixed read-only remote queries with bounded output;
 - structured output schemas and readable titles for every tool;
 - a consolidated agent-oriented operational snapshot;
-- an MCP operations-guide resource and safe-audit prompt;
-- HMAC-protected immutable mutation plans with expiry and one-time consumption;
+- MCP operations-guide and tools-catalog resources and a safe-audit prompt;
+- fixed Nginx syntax testing, an optional body-free loopback probe, and
+  content-free recent-error severity counts;
 - static-site source validation and signed deployment-plan previews;
-- 34 credential-free tests, successful production build, and zero known npm
-  audit vulnerabilities at the latest validation.
 
-No remote upload, deployment activation, service start/stop/restart, deletion,
-or permanent purge tool is enabled.
+— plus **approval-gated mutations**:
+
+- a master `WHATBOX_MUTATIONS_ENABLED` kill-switch (off by default);
+- HMAC-signed immutable plans carried as MCP `requestState`, with expiry,
+  exact-target binding, and one-time consumption;
+- destructive actions gated behind MCP elicitation (human approval), with a
+  redacted local audit log of every planned, approved, denied, and executed step;
+- file upload / download / move / mkdir with no-overwrite and free-space checks;
+- quarantine-based delete and a separate second-approval permanent purge;
+- allowlisted service configuration backup;
+- fixed service start/stop/restart using the documented userland recipes;
+- atomic static-site deployment with remote checksum verification, health check,
+  and rollback;
+- torrent add / pause / resume / label / ratio / remove over an SSH loopback
+  tunnel to Transmission or qBittorrent;
+- a credential-free test suite (53 tests), successful production build, and zero
+  known npm audit vulnerabilities at the latest validation.
 
 ## Install
 
@@ -72,8 +100,13 @@ actually published.
 
 ```bash
 codex mcp add whatbox -- node /absolute/path/to/whatbox-mcp/dist/index.js
-codex mcp list
+codex mcp get whatbox
 ```
+
+Registration is a one-time setup. Codex launches the registered `stdio`
+server automatically; do not keep `npm start` running in another terminal.
+See the [Startup Guide](docs/STARTUP.md) for the exact macOS reboot, SSH-agent,
+and daily launch sequence.
 
 The ChatGPT desktop app, Codex CLI, and Codex IDE extension share MCP
 configuration on the same Codex host. See the
@@ -140,9 +173,32 @@ selection.
 | `whatbox_services_status` | Inspect Allowlisted Whatbox Services | Reports known configuration-location and process state without arguments or configuration contents. |
 | `whatbox_configuration_review` | Review Whatbox Configuration Metadata | Produces conservative findings with confidence, observations, and recommendations. |
 | `whatbox_website_readiness` | Check Website Hosting Readiness | Checks fixed Nginx, configuration-existence, process, candidate-root, and storage facts. |
-| `whatbox_website_deployment_plan` | Plan a Static Website Deployment | Validates an allowlisted local source and creates a redacted signed preview; execution remains disabled. |
+| `whatbox_website_diagnostics` | Diagnose Userland Nginx Safely | Tests fixed Nginx syntax, optionally probes a loopback port without a response body, and returns recent error-severity counts without log lines. |
+| `whatbox_website_deployment_plan` | Plan a Static Website Deployment | Validates an allowlisted local source and creates a redacted signed preview. |
+| `whatbox_list_tools` | List Whatbox MCP Tools and Processes | Returns the full catalog by category and risk plus the current mutation state (backs `/tools`). |
 
-All tools are currently annotated read-only.
+### Mutation tools (require `WHATBOX_MUTATIONS_ENABLED=true`)
+
+| Tool | Risk | What it does |
+| --- | --- | --- |
+| `whatbox_upload_path` | reversible | Uploads an allowlisted local path; never overwrites; checks remote space. |
+| `whatbox_download_path` | reversible | Downloads a remote path into the local download directory; skips symlinks. |
+| `whatbox_move_path` | reversible | Moves/renames within allowed roots; never overwrites. |
+| `whatbox_make_directory` | reversible | Creates a directory and missing parents. |
+| `whatbox_backup_configuration` | reversible | Backs up allowlisted service config to a timestamped local archive. |
+| `whatbox_service_control` | reversible / destructive | Starts (reversible) or stops/restarts (approval) an allowlisted service. |
+| `whatbox_website_deploy_execute` | reversible | Stages, checksum-verifies, atomically activates, and health-checks a release. |
+| `whatbox_website_rollback` | destructive | Repoints to a prior release (approval). |
+| `whatbox_torrent_add` | reversible | Adds a magnet/HTTP(S) torrent. |
+| `whatbox_torrent_control` | reversible | Pauses/resumes/labels/ratio-limits one torrent. |
+| `whatbox_quarantine_path` | destructive | Soft-deletes a path into dated quarantine (approval). |
+| `whatbox_purge_quarantine` | destructive | Permanently deletes a quarantined item (second approval). |
+| `whatbox_torrent_remove` | destructive | Removes a torrent, optionally its data (approval). |
+| `whatbox_list_quarantine` | read-only | Lists quarantined items awaiting restore or purge. |
+
+Read-only tools are annotated read-only; mutation tools are annotated
+non-read-only, and destructive tools carry the destructive hint. Annotations are
+hints, never authorization.
 
 ## What agents can ask
 
@@ -153,6 +209,7 @@ Examples:
 - “Which supported services appear configured or running?”
 - “Map the top two levels of allowed root 0.”
 - “Assess whether the slot is ready for userland Nginx hosting.”
+- “Test Nginx syntax and the configured loopback endpoint without returning logs or response content.”
 - “Validate this allowlisted static-site source and show the deployment plan.”
 
 The agent should always separate observed facts from recommendations and should
@@ -191,6 +248,8 @@ authorized integration is added.
 - Sensitive directories and credential-like local source names are denied.
 - Storage results omit configured remote root paths.
 - Process state is collected from allowlisted command names without arguments.
+- Website diagnostics use fixed `/usr/sbin/nginx` and `/usr/bin/curl` probes;
+  configuration text, HTTP bodies, and log lines are never returned.
 - Tool annotations are hints, never authorization.
 
 See [Security Policy](SECURITY.md) and
@@ -198,23 +257,32 @@ See [Security Policy](SECURITY.md) and
 
 ## Mutation and approval model
 
-The codebase contains the foundation for future mutations but does not expose a
-mutation tool.
+Mutations are **off by default**. Set `WHATBOX_MUTATIONS_ENABLED=true` in the
+private local configuration to enable the mutation tools; without it every
+mutation tool returns a `mutations_disabled` denial.
 
-A future mutation must:
+Every mutation:
 
-1. create an immutable plan before execution;
-2. bind the exact slot, action, and canonical targets;
-3. expire within a short fixed window;
-4. use negotiated MCP `input_required` interaction with signed request state;
-5. validate explicit accepted human input;
-6. consume approval atomically at most once;
-7. revalidate path containment and target identity;
-8. provide validation, health checking, rollback, and redacted audit logging.
+1. creates an immutable HMAC-signed plan before execution;
+2. binds the exact slot, action, and canonical target digests;
+3. expires within a short fixed window (5 minutes; 10-minute hard maximum);
+4. is recorded in a redacted local audit log.
 
-Deletion has stronger rules: initial removal means quarantine, and permanent
-purge requires a separate second approval. A boolean or confirmation phrase
-supplied by a model is never sufficient.
+**Reversible** actions (upload, download, move, mkdir, backup, service start,
+website deploy, torrent add/control) run once the plan is created.
+
+**Destructive** actions (quarantine, purge, service stop/restart, website
+rollback, torrent remove) additionally require negotiated MCP elicitation:
+round one returns `input_required` carrying the sealed plan as signed
+`requestState`; the retry must carry an accepted human elicitation response and
+the untampered plan, whose action, slot, and exact targets are revalidated
+before one-time consumption. A boolean or confirmation phrase supplied by a
+model is never sufficient — approval comes from the client's own confirmation UI.
+
+Deletion has stronger rules: initial removal means quarantine (data is moved,
+not erased, so it is reversible and space-neutral), and permanent purge requires
+a separate second approval. Uploads, moves, and mkdir never overwrite; remote
+and local free space are checked before every transfer and deployment.
 
 ## Local configuration
 
@@ -239,6 +307,7 @@ npm run check:structure
 npm run check:services
 npm run check:review
 npm run check:website
+npm run check:website-diagnostics
 npm run check:snapshot
 ```
 
@@ -267,37 +336,37 @@ Run the production build:
 npm start
 ```
 
-MCP protocol messages use standard input/output. Diagnostics must use standard
-error so they do not corrupt the protocol stream.
+These manual commands are for development and protocol debugging. They wait
+silently for an MCP client over standard input/output and are not needed for
+normal Codex use. Diagnostics must use standard error so they do not corrupt
+the protocol stream.
 
 ## Roadmap
 
-Highest priority:
+Shipped in `0.10.0`: SFTP release staging with remote checksum validation, the
+signed `input_required` approval handshake with denial-path coverage, atomic
+static-site activation with health check and rollback, redacted audit logging,
+approval-gated service lifecycle actions, and torrent management through a
+loopback RPC tunnel.
 
-1. fixed SFTP release staging and remote manifest validation;
-2. signed `input_required` approval handshake and denial-path coverage;
-3. atomic static-site activation, fixed Nginx validation, bounded health checks,
-   rollback, and redacted audit logging;
-4. live staging and rollback validation before any deployment write is enabled.
+Next:
 
-Later:
-
-- read-only torrent summaries through separately configured supported client
-  APIs;
-- redacted recent-error and real service-health adapters;
-- approval-gated service lifecycle actions;
-- multiple separately authorized Whatbox profiles;
+- service-specific health adapters beyond userland Nginx;
+- multiple separately authorized Whatbox connection profiles;
 - optional authorized provider integration for Manage Apps and managed links;
 - a separately threat-modeled remote transport.
 
-PHP deployment is intentionally deferred until static deployment and rollback
-are live-validated.
+PHP application deployment is intentionally deferred until the static
+deployment and rollback path has been broadly live-validated.
 
 ## Documentation
 
 | Document | Purpose |
 | --- | --- |
+| [Getting Started](docs/GETTING_STARTED.md) | Bullet-point walkthrough, install first |
+| [Hotsheet](docs/HOTSHEET.md) | One-screen command, tool, and process reference |
 | [Installation Guide](docs/INSTALL.md) | Installation, client setup, updates, removal, and troubleshooting |
+| [Startup Guide](docs/STARTUP.md) | One-time registration, reboot startup, SSH-agent loading, and daily launch commands |
 | [Agent Usage Guide](docs/AGENT_USAGE.md) | Agent workflow, tool selection, and model safety rules |
 | [Local Configuration](docs/LOCAL_CONFIGURATION.md) | Private local configuration and sanitized checks |
 | [Architecture](docs/ARCHITECTURE.md) | Product scope, authority boundaries, deployment, and approval design |

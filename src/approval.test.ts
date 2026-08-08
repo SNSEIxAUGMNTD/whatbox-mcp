@@ -39,7 +39,11 @@ test("seals and verifies an immutable short-lived mutation plan", () => {
 test("rejects modified and expired mutation plans", () => {
   const { key, plan, now } = createFixture();
   const sealed = sealMutationPlan(plan, key);
-  const modified = `${sealed.slice(0, -1)}${sealed.endsWith("A") ? "B" : "A"}`;
+  const [version, payload, signature] = sealed.split(".");
+  // Flip the first signature char: its 6 bits are fully significant, so the
+  // decoded digest always changes (unlike the last char's unused low bits).
+  const flippedSignature = `${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}`;
+  const modified = `${version}.${payload}.${flippedSignature}`;
 
   assert.throws(() => verifyMutationPlan(modified, key, now + 1_000));
   assert.throws(() => verifyMutationPlan(sealed, key, plan.expiresAt));

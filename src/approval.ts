@@ -30,8 +30,15 @@ const mutationPlanSchema = z.object({
     "service_stop",
     "service_restart",
     "website_deploy",
+    "website_rollback",
     "path_quarantine",
-    "quarantine_purge"
+    "quarantine_purge",
+    "file_upload",
+    "path_move",
+    "path_create",
+    "torrent_add",
+    "torrent_control",
+    "torrent_remove"
   ]),
   slotBinding: z.string().regex(/^[a-f0-9]{64}$/),
   targetDigests: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1).max(100),
@@ -50,6 +57,11 @@ export function getApprovalStateDirectory(localHome = homedir()) {
 }
 
 function requireSecurePermissions(path: string) {
+  // POSIX permission bits are not meaningful on Windows (NTFS uses ACLs);
+  // enforce owner-only bits only on POSIX platforms.
+  if (process.platform === "win32") {
+    return;
+  }
   if ((statSync(path).mode & 0o077) !== 0) {
     throw new Error("Approval state permissions are too open");
   }

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whatbox MCP — security-first control for your Whatbox slot</title>
+<meta name="description" content="A security-first Model Context Protocol server for operating an owner-authorized Whatbox slot over SSH — inspection plus approval-gated, reversible-by-default control of files, services, website deploys, and torrents.">
+<style>
+  :root{
+    --ink:#08191d; --panel:#0c2f30; --panel2:#0a2529; --line:rgba(62,199,168,.18);
+    --text:#e7f2ef; --muted:#8fb8b3; --dim:#6f9691;
+    --teal:#3ec7a8; --teal-deep:#12866f; --copper:#e0932a;
+    --green:#4fbf87; --red:#e0736a;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:
+      radial-gradient(1100px 500px at 82% -8%, rgba(62,199,168,.10), transparent 60%),
+      radial-gradient(900px 500px at 8% 4%, rgba(224,147,42,.07), transparent 55%),
+      linear-gradient(180deg,var(--ink),#06141a 60%,var(--ink));
+    color:var(--text); font-family:var(--sans); line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--teal); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1060px; margin:0 auto; padding:0 22px}
+  .eyebrow{font-family:var(--mono); font-size:.74rem; letter-spacing:.22em; text-transform:uppercase; color:var(--teal); margin:0 0 14px}
+
+  /* hero */
+  header{padding:64px 0 40px; border-bottom:1px solid var(--line)}
+  .hero{display:flex; gap:34px; align-items:center; flex-wrap:wrap}
+  .mark{flex:0 0 auto; width:118px; height:118px}
+  .htext{flex:1 1 340px; min-width:280px}
+  h1{font-size:clamp(2.1rem,5vw,3.3rem); line-height:1.04; letter-spacing:-.02em; margin:.1em 0 .18em; text-wrap:balance;
+     background:linear-gradient(120deg,#eafaf5,#9fe6d3); -webkit-background-clip:text; background-clip:text; color:transparent}
+  .lede{font-size:1.16rem; color:var(--muted); margin:0 0 22px; max-width:60ch}
+  .chips{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:24px}
+  .chip{font-family:var(--mono); font-size:.8rem; font-weight:600; padding:7px 14px; border-radius:999px; display:inline-flex; gap:9px; align-items:center}
+  .chip::before{content:""; width:8px; height:8px; border-radius:50%}
+  .chip.t{background:rgba(18,134,111,.16); border:1px solid rgba(62,199,168,.45); color:#bff0e2}
+  .chip.t::before{background:var(--teal)}
+  .chip.c{background:rgba(224,147,42,.12); border:1px solid rgba(224,147,42,.5); color:#f2d4a3}
+  .chip.c::before{background:var(--copper)}
+  .cta{display:flex; gap:12px; flex-wrap:wrap; align-items:center}
+  .btn{display:inline-block; padding:12px 20px; border-radius:12px; font-weight:700; font-size:.95rem}
+  .btn.primary{background:linear-gradient(120deg,var(--teal),var(--teal-deep)); color:#052018}
+  .btn.ghost{border:1px solid var(--line); color:var(--text)}
+  .install{margin-top:18px; font-family:var(--mono); font-size:.9rem; background:var(--panel2); border:1px solid var(--line);
+     border-radius:12px; padding:14px 16px; overflow-x:auto; color:#cfeee6}
+  .install .p{color:var(--copper)}
+
+  section{padding:52px 0; border-bottom:1px solid var(--line)}
+  h2{font-size:1.6rem; letter-spacing:-.01em; margin:0 0 6px}
+  .sub{color:var(--muted); margin:0 0 26px; max-width:62ch}
+
+  /* two modes */
+  .modes{display:grid; grid-template-columns:1fr 1fr; gap:18px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2)); border:1px solid var(--line); border-radius:16px; padding:24px}
+  .card h3{margin:0 0 4px; font-size:1.18rem; display:flex; align-items:center; gap:10px}
+  .tag{font-family:var(--mono); font-size:.68rem; letter-spacing:.12em; text-transform:uppercase; padding:3px 9px; border-radius:6px}
+  .tag.obs{background:rgba(62,199,168,.16); color:var(--teal)}
+  .tag.act{background:rgba(224,147,42,.16); color:var(--copper)}
+  .card p{color:var(--muted); margin:.2em 0 14px}
+  .card ul{margin:0; padding-left:18px; color:var(--text)}
+  .card li{margin:.3em 0}
+  .card li::marker{color:var(--teal)}
+
+  /* tool matrix */
+  .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:16px}
+  .tcard{background:var(--panel2); border:1px solid var(--line); border-radius:14px; padding:18px}
+  .tcard .risk{font-family:var(--mono); font-size:.7rem; letter-spacing:.1em; text-transform:uppercase; font-weight:700; margin-bottom:12px; display:flex; align-items:center; gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%}
+  .green .dot{background:var(--green)} .green .risk{color:var(--green)}
+  .amber .dot{background:var(--copper)} .amber .risk{color:var(--copper)}
+  .red .dot{background:var(--red)} .red .risk{color:var(--red)}
+  .tcard code{font-family:var(--mono); font-size:.82rem; color:#d7efe8; display:block; padding:3px 0}
+  .tcard .note{color:var(--dim); font-size:.82rem; margin-top:10px}
+
+  /* flow */
+  .flow{display:flex; gap:12px; flex-wrap:wrap; counter-reset:s}
+  .step{flex:1 1 170px; background:var(--panel2); border:1px solid var(--line); border-radius:14px; padding:18px 16px; position:relative}
+  .step::before{counter-increment:s; content:counter(s); font-family:var(--mono); font-weight:700; color:var(--copper); font-size:.8rem; border:1px solid rgba(224,147,42,.5); border-radius:50%; width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; margin-bottom:10px}
+  .step b{display:block; margin-bottom:4px}
+  .step span{color:var(--muted); font-size:.9rem}
+
+  /* guarantees */
+  .guar{display:grid; grid-template-columns:1fr 1fr; gap:14px 30px}
+  .guar div{padding-left:26px; position:relative; color:var(--text)}
+  .guar div::before{content:"✓"; position:absolute; left:0; color:var(--teal); font-weight:800}
+  .guar b{color:#fff}
+  .out{color:var(--dim)}
+
+  footer{padding:40px 0 64px; color:var(--dim); font-size:.9rem}
+  footer a{color:var(--muted)}
+  .disc{margin-top:10px; font-size:.82rem}
+  @media(max-width:760px){ .modes,.grid3,.guar{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap hero">
+    <svg class="mark" viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Whatbox MCP logo">
+      <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="160" y2="160" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#0f3b3a"/><stop offset="1" stop-color="#0a2529"/></linearGradient>
+        <linearGradient id="tl" x1="30" y1="40" x2="130" y2="130" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#3ec7a8"/><stop offset="1" stop-color="#149e82"/></linearGradient>
+      </defs>
+      <rect x="4" y="4" width="152" height="152" rx="34" fill="url(#bg)"/>
+      <rect x="4.75" y="4.75" width="150.5" height="150.5" rx="33.25" fill="none" stroke="#3ec7a8" stroke-opacity=".28" stroke-width="1.5"/>
+      <path d="M44 58 L80 42 L116 58 L80 74 Z" fill="url(#tl)" fill-opacity=".25" stroke="url(#tl)" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M44 58 L80 74 L80 118 L44 102 Z" fill="url(#tl)" fill-opacity=".14" stroke="url(#tl)" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M116 58 L80 74 L80 118 L116 102 Z" fill="url(#tl)" fill-opacity=".08" stroke="url(#tl)" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M70 88 v-8 a10 10 0 0 1 20 0 v8" fill="none" stroke="#e0932a" stroke-width="4.5" stroke-linecap="round"/>
+      <rect x="66" y="88" width="28" height="22" rx="5" fill="#e0932a"/>
+      <circle cx="80" cy="98" r="3.4" fill="#0a2529"/><rect x="78.6" y="99" width="2.8" height="7" rx="1.4" fill="#0a2529"/>
+    </svg>
+    <div class="htext">
+      <p class="eyebrow">Model Context Protocol · local stdio</p>
+      <h1>Whatbox MCP</h1>
+      <p class="lede">A security-first MCP server that gives an AI agent bounded, structured access to one owner-authorized Whatbox slot — read-only by default, and every change gated behind a signed plan and your explicit approval.</p>
+      <div class="chips">
+        <span class="chip t">read-only by default</span>
+        <span class="chip c">approval-gated mutations</span>
+        <span class="chip t">no secrets in context</span>
+      </div>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/SNSEIxAUGMNTD/whatbox-mcp">View on GitHub</a>
+        <a class="btn ghost" href="https://github.com/SNSEIxAUGMNTD/whatbox-mcp/blob/main/docs/GETTING_STARTED.md">Get started</a>
+      </div>
+      <div class="install"><span class="p">$</span> git clone https://github.com/SNSEIxAUGMNTD/whatbox-mcp.git &amp;&amp; cd whatbox-mcp<br><span class="p">$</span> npm ci &amp;&amp; npm run build</div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The design</p>
+    <h2>Two modes, one boundary</h2>
+    <p class="sub">The server is an observation layer first. Control is a separate, deliberately harder path — off unless you turn it on, and never able to act destructively without a human in the loop.</p>
+    <div class="modes">
+      <div class="card">
+        <h3><span class="tag obs">Observe</span> Always on</h3>
+        <p>Bounded, credential-free inspection over pinned SSH. No shell, no file contents, no configured paths in the output.</p>
+        <ul>
+          <li>Storage, service, and torrent-process state</li>
+          <li>Directory listings &amp; a directory-only structure map</li>
+          <li>Userland Nginx readiness &amp; safe diagnostics</li>
+          <li>One consolidated operational snapshot</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="tag act">Act</span> Off by default</h3>
+        <p>Set <code>WHATBOX_MUTATIONS_ENABLED=true</code> to unlock changes. Reversible actions run from a signed plan; destructive ones always stop and ask.</p>
+        <ul>
+          <li>Upload · download · move · mkdir (never overwrite)</li>
+          <li>Configuration backup &amp; free-space checks</li>
+          <li>Service start / stop / restart</li>
+          <li>Atomic website deploy with health check &amp; rollback</li>
+          <li>Torrent add / control / remove via loopback RPC</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Every tool, by consequence</p>
+    <h2>Risk is a first-class property</h2>
+    <p class="sub">Each tool is labelled by what it can do. The label drives the safety flow — not a guess by the model.</p>
+    <div class="grid3">
+      <div class="tcard green">
+        <div class="risk"><span class="dot"></span>Reversible · auto-runs</div>
+        <code>whatbox_upload_path</code>
+        <code>whatbox_download_path</code>
+        <code>whatbox_move_path</code>
+        <code>whatbox_make_directory</code>
+        <code>whatbox_backup_configuration</code>
+        <code>whatbox_website_deploy_execute</code>
+        <code>whatbox_torrent_add</code>
+        <code>whatbox_torrent_control</code>
+        <p class="note">Runs once a signed plan is created, when mutations are enabled. Undoable.</p>
+      </div>
+      <div class="tcard red">
+        <div class="risk"><span class="dot"></span>Destructive · always asks</div>
+        <code>whatbox_quarantine_path</code>
+        <code>whatbox_purge_quarantine</code>
+        <code>whatbox_service_control (stop)</code>
+        <code>whatbox_website_rollback</code>
+        <code>whatbox_torrent_remove</code>
+        <p class="note">Requires explicit human approval via MCP elicitation — even in agent auto-mode. Delete quarantines first; purge needs a second approval.</p>
+      </div>
+      <div class="tcard green">
+        <div class="risk"><span class="dot" style="background:var(--teal)"></span>Read-only · safe</div>
+        <code>whatbox_operational_snapshot</code>
+        <code>whatbox_storage_status</code>
+        <code>whatbox_services_status</code>
+        <code>whatbox_website_diagnostics</code>
+        <code>whatbox_torrents_status</code>
+        <code>whatbox_list_tools</code>
+        <p class="note">Run the <code>/tools</code> command any time for the full catalog and the current mutation state.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The approval gate</p>
+    <h2>How a destructive change actually happens</h2>
+    <p class="sub">A model cannot self-approve. The confirmation comes from your client's own UI, bound to an HMAC-signed plan that names the exact action and targets.</p>
+    <div class="flow">
+      <div class="step"><b>Plan</b><span>An immutable, signed plan binds the slot, action, and exact target digests. Expires in minutes.</span></div>
+      <div class="step"><b>Ask</b><span>The tool returns <code>input_required</code> with the sealed plan and a yes/no prompt to you.</span></div>
+      <div class="step"><b>Verify</b><span>On approval, action &amp; targets are re-checked and the plan is consumed exactly once.</span></div>
+      <div class="step"><b>Execute</b><span>The change runs, is health-checked where relevant, and is written to a redacted audit log.</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">What holds, always</p>
+    <h2>Safety guarantees</h2>
+    <div class="guar">
+      <div><b>No generic shell.</b> Every remote command is a fixed, server-authored template.</div>
+      <div><b>No secrets in context.</b> Credentials stay in a local <code>0600</code> file, never in tool arguments or output.</div>
+      <div><b>Pinned host identity.</b> The SSH host key is verified by SHA-256 fingerprint.</div>
+      <div><b>Contained paths.</b> Access is limited to configured roots, with symlink &amp; traversal denial.</div>
+      <div><b>Delete means quarantine.</b> Removal is reversible; permanent purge is a separate second approval.</div>
+      <div><b>Space-aware.</b> Remote and local free space are checked before every transfer.</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <strong>Whatbox MCP</strong> · v0.10.0 · MIT ·
+    <a href="https://github.com/SNSEIxAUGMNTD/whatbox-mcp">GitHub</a> ·
+    <a href="https://github.com/SNSEIxAUGMNTD/whatbox-mcp/blob/main/docs/HOTSHEET.md">Hotsheet</a> ·
+    <a href="https://github.com/SNSEIxAUGMNTD/whatbox-mcp/blob/main/docs/AGENT_USAGE.md">Agent guide</a>
+    <div class="disc out">An independent project, not affiliated with or endorsed by Whatbox. Billing, Manage Apps, managed links, and DNS remain browser-only steps outside this MCP.</div>
+  </div>
+</footer>
+</body>
+</html>

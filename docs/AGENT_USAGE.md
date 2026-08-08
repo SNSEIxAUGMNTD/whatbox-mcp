@@ -4,6 +4,10 @@ Whatbox MCP is designed for local AI agents that need structured, bounded
 access to one owner-authorized Whatbox slot. It uses stdio transport and never
 accepts credentials in tool arguments.
 
+For human operator setup, SSH-agent loading, and reboot-to-launch commands, use
+the [Startup Guide](STARTUP.md). Codex starts the registered `stdio` process;
+the operator should not run a second manual server process during normal use.
+
 ## Recommended agent workflow
 
 1. Read the `whatbox://guide/agent-operations` MCP resource.
@@ -35,6 +39,7 @@ Agents may also invoke the `whatbox_safe_audit` prompt with a `focus` of
 | Allowlisted service metadata | `whatbox_services_status` |
 | Advisory findings | `whatbox_configuration_review` |
 | Website-hosting facts | `whatbox_website_readiness` |
+| Nginx syntax, loopback response, and redacted error counts | `whatbox_website_diagnostics` |
 | Static-site plan preview | `whatbox_website_deployment_plan` |
 
 Tool results include `structuredContent` and declared output schemas for agent
@@ -52,24 +57,36 @@ validation. JSON is also returned in a text block for older MCP clients.
 - Never treat a boolean, typed confirmation phrase, or model-generated text as
   human approval.
 - Never infer service health from process state alone.
+- Never request Nginx configuration text, HTTP response bodies, or raw log
+  lines when `whatbox_website_diagnostics` can return bounded facts.
 - Never traverse a path outside configured roots or follow a symlink escape.
 
 ## Mutation status
 
-Remote mutations are disabled. `whatbox_website_deployment_plan` validates a
-local allowlisted static site and returns a short-lived signed plan, but does
-not stage, upload, activate, validate, restart, or roll back anything.
+Remote mutations are disabled unless the operator sets
+`WHATBOX_MUTATIONS_ENABLED=true` in the private local configuration. When
+disabled, every mutation tool returns a `mutations_disabled` denial and only the
+read-only and planning tools do anything.
 
-Before any future mutation tool is enabled, it must have:
+When enabled, each mutation tool enforces:
 
-1. exact canonical targets and no wildcard expansion;
-2. negotiated MCP `input_required` interaction with signed request state;
-3. explicit accepted human input validated by schema;
-4. slot/action/target matching and expiry checks;
-5. atomic one-time plan consumption;
-6. fixed validation, health checking, and rollback;
-7. denial tests for missing, declined, cancelled, expired, modified,
-   mismatched, and reused approval.
+1. exact canonical target digests and no wildcard expansion;
+2. an immutable HMAC-signed plan carried as MCP `requestState`;
+3. slot/action/target matching and short expiry checks;
+4. atomic one-time plan consumption;
+5. a redacted local audit log of every planned, requested, approved, denied,
+   executed, and failed step.
+
+Reversible actions run once the plan is created. Destructive actions
+(`whatbox_quarantine_path`, `whatbox_purge_quarantine`, stop/restart via
+`whatbox_service_control`, `whatbox_website_rollback`, `whatbox_torrent_remove`)
+additionally require negotiated MCP `input_required` elicitation with an
+explicit accepted human response. A boolean, typed phrase, or model-generated
+text is never sufficient. Deletion quarantines first; permanent purge is a
+separate second approval.
+
+Agents should call `whatbox_list_tools` (or read `whatbox://guide/tools`) to see
+the current catalog and whether mutations are enabled before attempting a change.
 
 ## External provider boundaries
 
@@ -91,6 +108,7 @@ npm run build
 npm run check:config
 npm run check:connection
 npm run check:snapshot
+npm run check:website-diagnostics
 ```
 
 Do not enable shell tracing around live checks. If a live check fails, retain

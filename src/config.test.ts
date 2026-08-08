@@ -68,3 +68,77 @@ test("rejects a filesystem root website source allowlist", () => {
     })
   );
 });
+
+test("accepts an optional loopback website health port", () => {
+  const configured = parseConfigValues({
+    ...baseValues,
+    WHATBOX_WEBSITE_HEALTH_PORT: "19865"
+  });
+  const omitted = parseConfigValues({
+    ...baseValues,
+    WHATBOX_WEBSITE_HEALTH_PORT: ""
+  });
+
+  assert.equal(configured.websiteHealthPort, 19865);
+  assert.equal(omitted.websiteHealthPort, undefined);
+});
+
+test("rejects an invalid website health port", () => {
+  assert.throws(() =>
+    parseConfigValues({
+      ...baseValues,
+      WHATBOX_WEBSITE_HEALTH_PORT: "70000"
+    })
+  );
+});
+
+test("keeps mutations disabled unless explicitly enabled", () => {
+  assert.equal(parseConfigValues(baseValues).mutationsEnabled, false);
+  assert.equal(
+    parseConfigValues({ ...baseValues, WHATBOX_MUTATIONS_ENABLED: "false" })
+      .mutationsEnabled,
+    false
+  );
+  assert.equal(
+    parseConfigValues({ ...baseValues, WHATBOX_MUTATIONS_ENABLED: "true" })
+      .mutationsEnabled,
+    true
+  );
+});
+
+test("parses an optional torrent RPC configuration", () => {
+  assert.equal(parseConfigValues(baseValues).torrentRpc, undefined);
+
+  const config = parseConfigValues({
+    ...baseValues,
+    WHATBOX_TORRENT_CLIENT: "transmission",
+    WHATBOX_TORRENT_RPC_PORT: "9091"
+  });
+  assert.deepEqual(config.torrentRpc, {
+    client: "transmission",
+    port: 9091,
+    username: undefined,
+    password: undefined
+  });
+});
+
+test("requires a torrent RPC port when a torrent client is set", () => {
+  assert.throws(() =>
+    parseConfigValues({
+      ...baseValues,
+      WHATBOX_TORRENT_CLIENT: "qbittorrent"
+    })
+  );
+});
+
+test("expands the local download directory and rejects filesystem root", () => {
+  const config = parseConfigValues(
+    { ...baseValues, WHATBOX_DOWNLOAD_DIR: "~/Downloads/whatbox" },
+    "/Users/example"
+  );
+  assert.equal(config.downloadDirectory, "/Users/example/Downloads/whatbox");
+
+  assert.throws(() =>
+    parseConfigValues({ ...baseValues, WHATBOX_DOWNLOAD_DIR: "/" })
+  );
+});

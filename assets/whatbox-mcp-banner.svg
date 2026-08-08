@@ -1,0 +1,56 @@
+<svg width="1280" height="360" viewBox="0 0 1280 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Whatbox MCP — security-first control for your Whatbox slot">
+  <defs>
+    <linearGradient id="pg" x1="0" y1="0" x2="1280" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0c2f30"/>
+      <stop offset="0.55" stop-color="#0a2529"/>
+      <stop offset="1" stop-color="#08191d"/>
+    </linearGradient>
+    <linearGradient id="tl" x1="70" y1="120" x2="230" y2="270" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3ec7a8"/>
+      <stop offset="1" stop-color="#149e82"/>
+    </linearGradient>
+    <linearGradient id="wm" x1="360" y1="120" x2="900" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#eafaf5"/>
+      <stop offset="1" stop-color="#9fe6d3"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="360" fill="url(#pg)"/>
+  <!-- faint grid -->
+  <g stroke="#3ec7a8" stroke-opacity="0.06" stroke-width="1">
+    <path d="M0 90 H1280 M0 180 H1280 M0 270 H1280"/>
+    <path d="M320 0 V360 M640 0 V360 M960 0 V360"/>
+  </g>
+  <!-- logo mark -->
+  <g transform="translate(96 100)">
+    <rect x="0" y="0" width="160" height="160" rx="34" fill="#0a2529"/>
+    <rect x="0.75" y="0.75" width="158.5" height="158.5" rx="33.25" fill="none" stroke="#3ec7a8" stroke-opacity="0.30" stroke-width="1.5"/>
+    <path d="M40 54 L80 36 L120 54 L80 72 Z" fill="url(#tl)" fill-opacity="0.25" stroke="url(#tl)" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M40 54 L80 72 L80 120 L40 102 Z" fill="url(#tl)" fill-opacity="0.14" stroke="url(#tl)" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M120 54 L80 72 L80 120 L120 102 Z" fill="url(#tl)" fill-opacity="0.08" stroke="url(#tl)" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M69 88 v-9 a11 11 0 0 1 22 0 v9" fill="none" stroke="#e0932a" stroke-width="4.5" stroke-linecap="round"/>
+    <rect x="65" y="88" width="30" height="24" rx="5" fill="#e0932a"/>
+    <circle cx="80" cy="99" r="3.6" fill="#0a2529"/>
+    <rect x="78.5" y="100" width="3" height="7.5" rx="1.5" fill="#0a2529"/>
+  </g>
+  <!-- wordmark -->
+  <text x="312" y="152" font-family="'Segoe UI', system-ui, -apple-system, Roboto, sans-serif" font-size="70" font-weight="800" letter-spacing="-1.5" fill="url(#wm)">Whatbox MCP</text>
+  <text x="314" y="196" font-family="'Segoe UI', system-ui, -apple-system, Roboto, sans-serif" font-size="25" font-weight="500" fill="#8fb8b3">Security-first control for your Whatbox slot</text>
+  <!-- chips: widths derived from forced textLength so labels never overflow -->
+  <g font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="17" font-weight="600">
+    <g transform="translate(312 232)">
+      <rect x="0" y="0" width="262" height="40" rx="20" fill="#12866f" fill-opacity="0.18" stroke="#3ec7a8" stroke-opacity="0.5"/>
+      <circle cx="26" cy="20" r="5" fill="#3ec7a8"/>
+      <text x="44" y="26" fill="#bff0e2" textLength="200" lengthAdjust="spacingAndGlyphs">read-only by default</text>
+    </g>
+    <g transform="translate(598 232)">
+      <rect x="0" y="0" width="304" height="40" rx="20" fill="#e0932a" fill-opacity="0.14" stroke="#e0932a" stroke-opacity="0.55"/>
+      <circle cx="26" cy="20" r="5" fill="#e0932a"/>
+      <text x="44" y="26" fill="#f2d4a3" textLength="242" lengthAdjust="spacingAndGlyphs">approval-gated mutations</text>
+    </g>
+    <g transform="translate(926 232)">
+      <rect x="0" y="0" width="272" height="40" rx="20" fill="#12866f" fill-opacity="0.18" stroke="#3ec7a8" stroke-opacity="0.5"/>
+      <circle cx="26" cy="20" r="5" fill="#3ec7a8"/>
+      <text x="44" y="26" fill="#bff0e2" textLength="210" lengthAdjust="spacingAndGlyphs">no secrets in context</text>
+    </g>
+  </g>
+</svg>
