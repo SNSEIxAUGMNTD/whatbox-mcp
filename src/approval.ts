@@ -44,6 +44,10 @@ const mutationPlanSchema = z.object({
   slotBinding: z.string().regex(/^[a-f0-9]{64}$/),
   targetDigests: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1).max(100),
   summary: z.string().min(1).max(500),
+  // Optional forensic detail bound into the signed plan (e.g. the exact
+  // shell command for run_command). Absent for tools whose targets stay
+  // hashed. Recorded verbatim in the local audit log.
+  detail: z.string().max(4096).optional(),
   risk: z.enum(["reversible", "destructive"]),
   requiresSecondApproval: z.boolean(),
   createdAt: z.number().int().nonnegative(),
@@ -114,6 +118,7 @@ export function createMutationPlan(
     slotBinding: string;
     targetDigests: string[];
     summary: string;
+    detail?: string;
     risk: MutationPlan["risk"];
     requiresSecondApproval?: boolean;
   },
@@ -131,6 +136,7 @@ export function createMutationPlan(
     slotBinding: input.slotBinding,
     targetDigests: [...new Set(input.targetDigests)].sort(),
     summary: input.summary,
+    ...(input.detail ? { detail: input.detail.slice(0, 4096) } : {}),
     risk: input.risk,
     requiresSecondApproval: input.requiresSecondApproval ?? false,
     createdAt: now,

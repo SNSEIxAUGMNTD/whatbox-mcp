@@ -6,6 +6,30 @@ const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_TORRENTS_RETURNED = 200;
 const MAX_NAME_LENGTH = 200;
 const MAX_URI_LENGTH = 4096;
+// A local SCGI round-trip is near-instant; a wedged rTorrent must not hang
+// the tool. The enclosing SSH client is torn down per call, which reaps any
+// stream a rejection leaves behind.
+const RTORRENT_TIMEOUT_MS = 20_000;
+
+export function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 
 // SSH loopback tunnel ------------------------------------------------------
 
@@ -701,7 +725,11 @@ async function resolveRtorrentEndpoint(
   for (const path of candidates) {
     let content: string;
     try {
-      content = await readRemoteFileBounded(ssh, path, RTORRENT_RC_MAX_BYTES);
+      content = await withTimeout(
+        readRemoteFileBounded(ssh, path, RTORRENT_RC_MAX_BYTES),
+        RTORRENT_TIMEOUT_MS,
+        "Timed out reading the rTorrent configuration file"
+      );
     } catch {
       continue;
     }
@@ -740,25 +768,52 @@ export function buildScgiRequest(body: Buffer): Buffer {
   ]);
 }
 
-function scgiRequest(stream: Duplex, body: Buffer): Promise<Buffer> {
+function scgiRequest(
+  stream: Duplex,
+  body: Buffer,
+  timeoutMs = RTORRENT_TIMEOUT_MS
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let bytes = 0;
+    let settled = false;
+
+    const finish = (action: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      action();
+    };
+
+    const timer = setTimeout(() => {
+      finish(() => {
+        stream.destroy();
+        reject(new Error("The SCGI request timed out"));
+      });
+    }, timeoutMs);
 
     stream.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > MAX_RESPONSE_BYTES) {
-        stream.destroy();
-        reject(new Error("The SCGI response exceeded the bounded size"));
+        finish(() => {
+          stream.destroy();
+          reject(new Error("The SCGI response exceeded the bounded size"));
+        });
         return;
       }
       chunks.push(chunk);
     });
-    stream.on("error", () => reject(new Error("The SCGI stream failed")));
+    stream.on("error", () =>
+      finish(() => reject(new Error("The SCGI stream failed")))
+    );
     stream.on("close", () => {
-      const raw = Buffer.concat(chunks);
-      const headerEnd = raw.indexOf("\r\n\r\n");
-      resolve(headerEnd === -1 ? raw : raw.subarray(headerEnd + 4));
+      finish(() => {
+        const raw = Buffer.concat(chunks);
+        const headerEnd = raw.indexOf("\r\n\r\n");
+        resolve(headerEnd === -1 ? raw : raw.subarray(headerEnd + 4));
+      });
     });
     stream.end(buildScgiRequest(body));
   });
@@ -875,10 +930,13 @@ async function rtorrentCall(
   method: string,
   params: Array<string | number>
 ): Promise<XmlRpcValue> {
-  const stream =
+  const stream = await withTimeout(
     endpoint.kind === "unix"
-      ? await openUnixTunnel(ssh, endpoint.path ?? "")
-      : await openLoopbackTunnel(ssh, endpoint.port ?? 0);
+      ? openUnixTunnel(ssh, endpoint.path ?? "")
+      : openLoopbackTunnel(ssh, endpoint.port ?? 0),
+    RTORRENT_TIMEOUT_MS,
+    "Timed out opening the rTorrent RPC endpoint"
+  );
   const response = await scgiRequest(stream, buildXmlMethodCall(method, params));
   return parseXmlRpcResponse(response.toString("utf8"));
 }

@@ -49,6 +49,13 @@ export interface MutationRequest {
   canonicalTargets: string[];
   /** Safe display strings (relative paths, service names) for the dialog. */
   displayTargets: string[];
+  /**
+   * Optional verbatim detail recorded in the audit log and bound into the
+   * signed plan — used by run_command to record the exact command, whose
+   * text is the whole forensic value. Omit for tools whose targets should
+   * stay hashed.
+   */
+  auditDetail?: string;
   /** Destructive actions always require an explicit human approval round. */
   requiresApproval: boolean;
 }
@@ -80,6 +87,10 @@ export interface AuditEvent {
     | "executed"
     | "execution_failed";
   reason?: DeniedReason;
+  /** Redacted human summary (purpose) — safe by construction. */
+  summary?: string;
+  /** Verbatim detail for run_command; absent for path-hashed tools. */
+  detail?: string;
   targetDigests: string[];
 }
 
@@ -110,6 +121,8 @@ function audit(
       risk: plan.risk,
       outcome,
       ...(reason ? { reason } : {}),
+      summary: plan.summary,
+      ...(plan.detail ? { detail: plan.detail } : {}),
       targetDigests: plan.targetDigests
     },
     stateDirectory
@@ -165,6 +178,7 @@ export function gateMutation(
         slotBinding,
         targetDigests,
         summary: request.summary,
+        detail: request.auditDetail,
         risk: request.risk
       },
       now
@@ -185,6 +199,7 @@ export function gateMutation(
         slotBinding,
         targetDigests,
         summary: request.summary,
+        detail: request.auditDetail,
         risk: request.risk
       },
       now

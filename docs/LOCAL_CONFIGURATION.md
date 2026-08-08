@@ -82,8 +82,9 @@ excluded from observation regardless of this setting.
 `WHATBOX_MUTATIONS_ENABLED` and both must be `true` for the tool to run. Every
 command requires human approval of the exact command text, is checked against
 a denylist of destructive shapes, is bounded by a timeout, and is recorded in
-the audit log. The denylist is a backstop, not the boundary: read the command
-before approving it.
+the audit log — the exact command text and purpose, bound into the signed
+plan. The denylist is a backstop, not the boundary: read the command before
+approving it.
 
 `WHATBOX_TORRENT_CLIENT` — set the client (`rtorrent`, `transmission`, or
 `qbittorrent`) to enable the torrent tools. For `rtorrent` nothing else is

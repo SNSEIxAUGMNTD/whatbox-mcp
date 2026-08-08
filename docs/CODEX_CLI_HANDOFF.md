@@ -4,11 +4,24 @@
 
 - Working directory: the repository root containing this document
 - Package: `whatbox-mcp`
-- Current version: `0.11.0`
+- Current version: `0.11.1`
 - Runtime: Node.js 20 or newer, TypeScript, ESM
 - Transport: local MCP stdio
 - Baseline commit: `f0c95db` on `main`. Inspect `git status` before editing and
   preserve all working-tree changes made after that commit.
+
+## 0.11.1 update
+
+- S1: the rTorrent SCGI path now enforces a 20s timeout (`withTimeout` +
+  an internal timer in `scgiRequest` that destroys the stream), matching
+  the shell tool's timeout. A wedged rTorrent no longer hangs the torrent
+  tools; the enclosing per-call SSH client teardown reaps any leftover stream.
+- S2: `run_command` records the verbatim command and purpose in the audit
+  log. The command is bound into the signed plan via a new optional
+  `detail` field (≤4096, HMAC-covered), so it appears on the requested,
+  approved, and executed lines correlated by planId. Other tools leave
+  `detail` unset and keep their targets hashed. `AuditEvent` also now logs
+  `summary` for every action.
 
 ## 0.11.0 update
 

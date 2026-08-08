@@ -457,6 +457,9 @@ export function registerMutationTools(server: McpServer) {
             // must never authorize a different one.
             canonicalTargets: [`command:${command}`],
             displayTargets: [command],
+            // Record the verbatim command in the audit log — for a shell
+            // tool the command text is the entire forensic value.
+            auditDetail: command,
             requiresApproval: true
           };
         },
