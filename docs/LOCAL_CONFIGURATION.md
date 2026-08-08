@@ -70,10 +70,31 @@ destructive actions still require explicit human approval every time.
 root is rejected. Downloads and backups return counts and sizes only; file
 contents never enter the model context.
 
-`WHATBOX_TORRENT_CLIENT` and `WHATBOX_TORRENT_RPC_PORT` — set the client
-(`transmission` or `qbittorrent`) and its loopback RPC/WebUI port to enable the
-torrent tools. The MCP reaches the RPC through an SSH loopback tunnel; it never
-exposes the port publicly.
+`WHATBOX_OBSERVE_ROOTS` — comma-separated directories the read-only
+observation tools (directory listing, structure map, storage status) may look
+at. Defaults to the slot home directory. Mutation tools never use this list;
+they stay inside `WHATBOX_ALLOWED_ROOTS`. Sensitive directories (`.ssh`,
+rclone and Deluge configuration, and similar credential locations) are always
+excluded from observation regardless of this setting.
+
+`WHATBOX_SHELL_ENABLED` — set to exactly `true` to enable the
+`whatbox_run_command` tool. This is a separate switch from
+`WHATBOX_MUTATIONS_ENABLED` and both must be `true` for the tool to run. Every
+command requires human approval of the exact command text, is checked against
+a denylist of destructive shapes, is bounded by a timeout, and is recorded in
+the audit log. The denylist is a backstop, not the boundary: read the command
+before approving it.
+
+`WHATBOX_TORRENT_CLIENT` — set the client (`rtorrent`, `transmission`, or
+`qbittorrent`) to enable the torrent tools. For `rtorrent` nothing else is
+required: the SCGI endpoint is discovered from `~/.rtorrent.rc` and reached
+over the existing SSH connection, so no torrent credentials exist at all.
+`WHATBOX_TORRENT_RPC_SOCKET` (unix socket path) or `WHATBOX_TORRENT_RPC_PORT`
+override discovery when set.
+
+`WHATBOX_TORRENT_RPC_PORT` — required for `transmission` and `qbittorrent`:
+their loopback RPC/WebUI port. The MCP reaches the RPC through an SSH loopback
+tunnel; it never exposes the port publicly.
 
 `WHATBOX_TORRENT_RPC_USERNAME` and `WHATBOX_TORRENT_RPC_PASSWORD` — optional
 credentials for that RPC, if your client requires them. These are the torrent

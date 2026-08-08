@@ -13,7 +13,10 @@ import { withWhatboxClient } from "./whatbox.js";
 import {
   backupWhatboxConfiguration,
   BACKUP_TARGETS,
+  assertShellCommandAllowed,
   controlWhatboxService,
+  runApprovedShellCommand,
+  SHELL_MAX_TIMEOUT_SECONDS,
   describeMakeDirectoryTargets,
   describeMoveTargets,
   describePurgeTargets,
@@ -418,6 +421,56 @@ export function registerMutationTools(server: McpServer) {
     }
   );
 
+  // -- Tier 3: composed shell, human-in-the-loop ---------------------------
+
+  server.registerTool(
+    "whatbox_run_command",
+    {
+      title: "Run an Approved Shell Command",
+      annotations: MUTATION_ANNOTATIONS,
+      description:
+        "Run one composed shell command on the slot. Always requires explicit human approval of the exact command text, and is only available when WHATBOX_SHELL_ENABLED=true. Returns bounded stdout, stderr, and the exit code.",
+      inputSchema: z.object({
+        command: z.string().min(1).max(4096),
+        purpose: z.string().min(1).max(500),
+        timeoutSeconds: z
+          .number()
+          .int()
+          .min(1)
+          .max(SHELL_MAX_TIMEOUT_SECONDS)
+          .default(120)
+      })
+    },
+    async (input, ctx) =>
+      runGated(
+        ctx as MutationContextLike,
+        (config) => {
+          if (!config.shellEnabled) {
+            throw new Error("Shell commands are disabled");
+          }
+          const command = assertShellCommandAllowed(input.command);
+          return {
+            action: "run_command",
+            risk: "destructive" as const,
+            summary: input.purpose,
+            // The exact text is the approval target: approving one command
+            // must never authorize a different one.
+            canonicalTargets: [`command:${command}`],
+            displayTargets: [command],
+            requiresApproval: true
+          };
+        },
+        (config) =>
+          withWhatboxClient(config, (client) =>
+            runApprovedShellCommand(
+              client,
+              assertShellCommandAllowed(input.command),
+              input.timeoutSeconds * 1000
+            )
+          )
+      )
+  );
+
   // -- Website deployment execution + rollback -----------------------------
 
   server.registerTool(
@@ -529,7 +582,7 @@ export function registerMutationTools(server: McpServer) {
         openWorldHint: false
       },
       description:
-        "Report bounded torrent status (name, state, progress, ratio, label, totals) through an SSH loopback tunnel to the configured client RPC. Read-only.",
+        "Report bounded torrent status (name, state, progress, ratio, uploaded bytes, label, totals) through an SSH tunnel to the configured client RPC. rTorrent results are sorted by total uploaded, most first. Read-only.",
       inputSchema: z.object({})
     },
     async () => {

@@ -20,6 +20,7 @@ import {
 } from "./agent.js";
 import { registerMutationTools } from "./server-mutations.js";
 import {
+  getWhatboxAccountQuota,
   getWhatboxStorageStatus,
   getWhatboxServiceInventory,
   getWhatboxTorrentClientStatus,
@@ -33,7 +34,7 @@ import {
 } from "./whatbox.js";
 
 export const SERVER_NAME = "whatbox-mcp";
-export const SERVER_VERSION = "0.10.0";
+export const SERVER_VERSION = "0.11.0";
 
 const READ_ONLY_TOOL_ANNOTATIONS = {
   readOnlyHint: true,
@@ -61,6 +62,8 @@ const connectionOutputSchema = z.object({
 
 const storageRootOutputSchema = z.object({
   rootIndex: z.number().int().nonnegative(),
+  // df on a shared seedbox reports the whole array, not the account's plan.
+  measures: z.literal("shared_filesystem"),
   totalBytes: z.number().nonnegative(),
   usedBytes: z.number().nonnegative(),
   availableBytes: z.number().nonnegative(),
@@ -174,6 +177,7 @@ export function getCapabilities() {
       "whatbox_configuration_status",
       "whatbox_connection_status",
       "whatbox_storage_status",
+      "whatbox_account_quota",
       "whatbox_list_directory",
       "whatbox_torrent_clients_status",
       "whatbox_structure_map",
@@ -195,6 +199,7 @@ export function getCapabilities() {
       "whatbox_website_deploy_execute",
       "whatbox_website_rollback",
       "whatbox_torrents_status",
+      "whatbox_run_command",
       "whatbox_torrent_add",
       "whatbox_torrent_control",
       "whatbox_torrent_remove"
@@ -235,12 +240,30 @@ export function getCapabilities() {
   };
 }
 
+export function describeMutationState() {
+  // The instruction text must reflect live configuration; a hardcoded claim
+  // here previously contradicted whatbox_list_tools.
+  try {
+    const config = loadConfig();
+    const mutations = config.mutationsEnabled
+      ? "Remote mutations are currently enabled"
+      : "Remote mutations are currently disabled";
+    const shell = config.shellEnabled
+      ? "; approved-shell commands are enabled."
+      : "; approved-shell commands are disabled.";
+    return `${mutations}${shell}`;
+  } catch {
+    return "Mutation state is reported live by whatbox_list_tools.";
+  }
+}
+
 export function createServer() {
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
       instructions:
-        "This server is security-first. Read whatbox://guide/agent-operations and prefer whatbox_operational_snapshot for assessment. Never request, accept, display, or persist secrets in tool arguments. Keep observations separate from recommendations and never infer health from process state. Every mutation requires a prior immutable plan and negotiated external human approval bound to exact targets; model-provided confirmation is insufficient. Remote mutations are currently disabled."
+        "This server is security-first. Read whatbox://guide/agent-operations and prefer whatbox_operational_snapshot for assessment. Never request, accept, display, or persist secrets in tool arguments. Keep observations separate from recommendations and never infer health from process state. Every mutation requires a prior immutable plan and negotiated external human approval bound to exact targets; model-provided confirmation is insufficient. " +
+        describeMutationState()
     }
   );
 
@@ -921,6 +944,47 @@ export function createServer() {
             {
               type: "text",
               text: "Unable to read torrent-client status. Check the local connection configuration."
+            }
+          ]
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "whatbox_account_quota",
+    {
+      title: "Inspect Whatbox Account Quota",
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      description:
+        "Report the slot account's own disk quota and usage using a fixed read-only query. Unlike storage status, this reflects the account rather than the shared filesystem.",
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        source: z.enum(["quota", "du", "unavailable"]),
+        usedBytes: z.number().nullable(),
+        softLimitBytes: z.number().nullable(),
+        hardLimitBytes: z.number().nullable(),
+        usedPercent: z.number().nullable(),
+        measuredMs: z.number().nullable()
+      })
+    },
+    async () => {
+      try {
+        const config = loadConfig();
+        const result = await withWhatboxClient(config, (client) =>
+          getWhatboxAccountQuota(client, config)
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result
+        };
+      } catch {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "Unable to read account quota. Check local configuration."
             }
           ]
         };

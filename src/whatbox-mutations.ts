@@ -1376,3 +1376,126 @@ export async function rollbackWebsiteRelease(
     sftp.end();
   }
 }
+
+// -- Tier 3: composed shell, human-in-the-loop -------------------------------
+
+const SHELL_MAX_OUTPUT_BYTES = 64 * 1024;
+
+// The safety property of this tool is that a human reads exactly what runs.
+// Each pattern below either breaks that property or is destructive enough that
+// no novice should be able to approve it from a single prompt.
+const SHELL_DENY_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  {
+    // Bare shells, pathed shells (/bin/sh), and env-invoked shells alike.
+    pattern: /\|\s*(\S*\/)?(env\s+)?(ba|k|z|da)?sh\b/,
+    reason: "pipes fetched content into a shell, so the approved text is not what executes"
+  },
+  {
+    pattern: /<\(/,
+    reason: "process substitution executes fetched content that was never reviewed"
+  },
+  {
+    pattern: /\beval\b/,
+    reason: "eval obscures what actually executes"
+  },
+  {
+    pattern: /\brm\b[^\n]*(\s-[a-zA-Z]*[rf]|--recursive\b|--force\b)/,
+    reason: "recursive or forced deletion; use the quarantine tool instead"
+  },
+  {
+    pattern: /\bfind\b[^\n]*-delete\b/,
+    reason: "bulk deletion; use the quarantine tool instead"
+  },
+  {
+    pattern: /\bxargs\b[^\n]*\brm\b/,
+    reason: "bulk deletion; use the quarantine tool instead"
+  },
+  { pattern: /\b(mkfs|dd|shred)\b/, reason: "raw or unrecoverable write" },
+  { pattern: /:\s*\(\s*\)\s*\{/, reason: "fork bomb shape" },
+  { pattern: /\bcrontab\b[^\n]*\s-r\b/, reason: "wipes all scheduled jobs" },
+  { pattern: /\bchmod\b[^\n]*-R[^\n]*777/, reason: "recursive world-writable permissions" },
+  { pattern: /\b(reboot|shutdown|halt|poweroff)\b/, reason: "host-level power action" },
+  {
+    pattern: /(\.ssh|\.gnupg|\.password-store|authorized_keys|rclone\.conf|deluge\/auth)/,
+    reason: "touches credential material"
+  }
+];
+
+export function assertShellCommandAllowed(command: string) {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    throw new Error("Command must not be empty");
+  }
+  for (const { pattern, reason } of SHELL_DENY_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      throw new Error(`Refused: the command ${reason}.`);
+    }
+  }
+  return trimmed;
+}
+
+const SHELL_DEFAULT_TIMEOUT_MS = 120_000;
+export const SHELL_MAX_TIMEOUT_SECONDS = 600;
+
+export function runApprovedShellCommand(
+  client: Client,
+  command: string,
+  timeoutMs = SHELL_DEFAULT_TIMEOUT_MS
+): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  timedOut: boolean;
+}> {
+  return new Promise((resolve, reject) => {
+    client.exec(command, (error, stream) => {
+      if (error) {
+        reject(new Error("Unable to run the approved command"));
+        return;
+      }
+
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let bytes = 0;
+      let truncated = false;
+      let timedOut = false;
+      let settled = false;
+
+      // Arbitrary shell can block forever (a command waiting on stdin, a
+      // walk over a busy disk). The fixed-query executor gets away without a
+      // timeout because its commands are bounded by construction; this one
+      // must enforce the bound itself.
+      const timer = setTimeout(() => {
+        timedOut = true;
+        stream.close();
+      }, timeoutMs);
+
+      const collect = (target: Buffer[]) => (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > SHELL_MAX_OUTPUT_BYTES) {
+          truncated = true;
+          return;
+        }
+        target.push(chunk);
+      };
+
+      stream.on("data", collect(stdout));
+      stream.stderr.on("data", collect(stderr));
+      stream.on("close", (code: number | undefined) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve({
+          exitCode: typeof code === "number" ? code : -1,
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+          truncated,
+          timedOut
+        });
+      });
+    });
+  });
+}

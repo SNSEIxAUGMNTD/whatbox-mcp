@@ -29,9 +29,15 @@ const rawConfigSchema = z
       .trim()
       .regex(/^SHA256:[A-Za-z0-9+/]+={0,2}$/),
     WHATBOX_ALLOWED_ROOTS: z.string().trim().optional(),
+    WHATBOX_OBSERVE_ROOTS: z.string().trim().optional(),
     WHATBOX_WEBSITE_SOURCE_ROOTS: z.string().trim().optional(),
     WHATBOX_WEBSITE_HEALTH_PORT: optionalPortSchema,
     WHATBOX_MUTATIONS_ENABLED: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => value === "true"),
+    WHATBOX_SHELL_ENABLED: z
       .string()
       .trim()
       .optional()
@@ -41,9 +47,10 @@ const rawConfigSchema = z
       .preprocess(
         (value) =>
           typeof value === "string" && value.trim() === "" ? undefined : value,
-        z.enum(["transmission", "qbittorrent"]).optional()
+        z.enum(["transmission", "qbittorrent", "rtorrent"]).optional()
       ),
     WHATBOX_TORRENT_RPC_PORT: optionalPortSchema,
+    WHATBOX_TORRENT_RPC_SOCKET: z.string().trim().optional(),
     WHATBOX_TORRENT_RPC_USERNAME: z.string().optional(),
     WHATBOX_TORRENT_RPC_PASSWORD: z.string().optional()
   })
@@ -58,8 +65,11 @@ const rawConfigSchema = z
   });
 
 export interface TorrentRpcConfig {
-  client: "transmission" | "qbittorrent";
-  port: number;
+  client: "transmission" | "qbittorrent" | "rtorrent";
+  // transmission/qbittorrent require a WebUI port. rtorrent uses a local SCGI
+  // endpoint, discovered from ~/.rtorrent.rc when not configured explicitly.
+  port?: number;
+  socketPath?: string;
   username?: string;
   password?: string;
 }
@@ -73,9 +83,11 @@ export interface WhatboxConfig {
   sshKeyPassphrase?: string;
   hostFingerprintSha256: string;
   allowedRoots: string[];
+  observeRoots: string[];
   websiteSourceRoots: string[];
   websiteHealthPort?: number;
   mutationsEnabled: boolean;
+  shellEnabled: boolean;
   downloadDirectory?: string;
   torrentRpc?: TorrentRpcConfig;
 }
@@ -111,8 +123,11 @@ export function expandLocalPath(value: string, localHome = homedir()) {
   return resolve(value);
 }
 
-function parseAllowedRoots(rawValue: string | undefined, username: string) {
-  const defaultRoot = `/home/${username}/files`;
+function parseAllowedRoots(
+  rawValue: string | undefined,
+  username: string,
+  defaultRoot = `/home/${username}/files`
+) {
   const values = rawValue
     ? rawValue.split(",").map((value) => value.trim()).filter(Boolean)
     : [defaultRoot];
@@ -124,7 +139,7 @@ function parseAllowedRoots(rawValue: string | undefined, username: string) {
     const normalized = posix.normalize(expanded);
 
     if (!normalized.startsWith("/") || normalized === "/") {
-      throw new Error("WHATBOX_ALLOWED_ROOTS must contain absolute non-root paths");
+      throw new Error("Configured roots must contain absolute non-root paths");
     }
 
     return normalized.replace(/\/$/, "");
@@ -171,12 +186,19 @@ export function parseConfigValues(
       parsed.WHATBOX_ALLOWED_ROOTS,
       parsed.WHATBOX_USERNAME
     ),
+    // Read-only tools observe the whole slot; mutations stay inside allowedRoots.
+    observeRoots: parseAllowedRoots(
+      parsed.WHATBOX_OBSERVE_ROOTS,
+      parsed.WHATBOX_USERNAME,
+      `/home/${parsed.WHATBOX_USERNAME}`
+    ),
     websiteSourceRoots: parseWebsiteSourceRoots(
       parsed.WHATBOX_WEBSITE_SOURCE_ROOTS,
       localHome
     ),
     websiteHealthPort: parsed.WHATBOX_WEBSITE_HEALTH_PORT,
     mutationsEnabled: parsed.WHATBOX_MUTATIONS_ENABLED,
+    shellEnabled: parsed.WHATBOX_SHELL_ENABLED,
     downloadDirectory: parseDownloadDirectory(
       parsed.WHATBOX_DOWNLOAD_DIR,
       localHome
@@ -201,23 +223,28 @@ function parseDownloadDirectory(
 }
 
 function parseTorrentRpc(parsed: {
-  WHATBOX_TORRENT_CLIENT?: "transmission" | "qbittorrent";
+  WHATBOX_TORRENT_CLIENT?: "transmission" | "qbittorrent" | "rtorrent";
   WHATBOX_TORRENT_RPC_PORT?: number;
+  WHATBOX_TORRENT_RPC_SOCKET?: string;
   WHATBOX_TORRENT_RPC_USERNAME?: string;
   WHATBOX_TORRENT_RPC_PASSWORD?: string;
 }): TorrentRpcConfig | undefined {
   if (!parsed.WHATBOX_TORRENT_CLIENT) {
     return undefined;
   }
-  if (!parsed.WHATBOX_TORRENT_RPC_PORT) {
+  if (
+    parsed.WHATBOX_TORRENT_CLIENT !== "rtorrent"
+    && !parsed.WHATBOX_TORRENT_RPC_PORT
+  ) {
     throw new Error(
-      "WHATBOX_TORRENT_RPC_PORT is required when WHATBOX_TORRENT_CLIENT is set"
+      "WHATBOX_TORRENT_RPC_PORT is required when WHATBOX_TORRENT_CLIENT is set to transmission or qbittorrent"
     );
   }
 
   return {
     client: parsed.WHATBOX_TORRENT_CLIENT,
     port: parsed.WHATBOX_TORRENT_RPC_PORT,
+    socketPath: parsed.WHATBOX_TORRENT_RPC_SOCKET || undefined,
     username: parsed.WHATBOX_TORRENT_RPC_USERNAME || undefined,
     password: parsed.WHATBOX_TORRENT_RPC_PASSWORD || undefined
   };

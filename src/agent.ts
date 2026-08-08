@@ -42,7 +42,12 @@ export interface OperationalSnapshot {
 }
 
 export function toSafeStorageStatus(storage: StorageStatus[]) {
-  return storage.map(({ rootPath: _rootPath, ...root }) => root);
+  return storage.map(({ rootPath: _rootPath, ...root }) => ({
+    ...root,
+    // df reflects the shared array; use whatbox_account_quota for the
+    // account's own footprint against its plan.
+    measures: "shared_filesystem" as const
+  }));
 }
 
 export function buildOperationalSnapshot(
@@ -150,7 +155,8 @@ export interface ToolCatalogEntry {
     | "backup"
     | "services"
     | "website"
-    | "torrents";
+    | "torrents"
+    | "shell";
   mutating: boolean;
   risk: "read_only" | "reversible" | "destructive";
   summary: string;
@@ -163,6 +169,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: "whatbox_connection_status", title: "Connection status", category: "observe", mutating: false, risk: "read_only", summary: "Pinned SSH connectivity check." },
   { name: "whatbox_operational_snapshot", title: "Operational snapshot", category: "observe", mutating: false, risk: "read_only", summary: "Consolidated storage, services, website, and safety state." },
   { name: "whatbox_storage_status", title: "Storage capacity", category: "observe", mutating: false, risk: "read_only", summary: "Filesystem capacity by allowed root." },
+  { name: "whatbox_account_quota", title: "Account quota", category: "observe", mutating: false, risk: "read_only", summary: "The account's own disk quota and usage, not the shared filesystem." },
   { name: "whatbox_list_directory", title: "List directory", category: "observe", mutating: false, risk: "read_only", summary: "Bounded entries below an allowed root." },
   { name: "whatbox_structure_map", title: "Structure map", category: "observe", mutating: false, risk: "read_only", summary: "Directory-only map and Mermaid diagram." },
   { name: "whatbox_torrent_clients_status", title: "Torrent client processes", category: "observe", mutating: false, risk: "read_only", summary: "Running state of supported torrent clients." },
@@ -181,6 +188,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: "whatbox_quarantine_path", title: "Quarantine (soft-delete)", category: "delete", mutating: true, risk: "destructive", summary: "Move a path to dated quarantine. Approval required." },
   { name: "whatbox_purge_quarantine", title: "Purge quarantine", category: "delete", mutating: true, risk: "destructive", summary: "Permanently delete a quarantined item. Second approval." },
   { name: "whatbox_service_control", title: "Service control", category: "services", mutating: true, risk: "destructive", summary: "Start (reversible) / stop / restart a service. Stop/restart need approval." },
+  { name: "whatbox_run_command", title: "Run approved shell command", category: "shell", mutating: true, risk: "destructive", summary: "One composed command; the exact text requires human approval. Off unless WHATBOX_SHELL_ENABLED=true." },
   { name: "whatbox_website_deploy_execute", title: "Deploy website", category: "website", mutating: true, risk: "reversible", summary: "Stage, verify, atomically activate, health-check a release." },
   { name: "whatbox_website_rollback", title: "Roll back website", category: "website", mutating: true, risk: "destructive", summary: "Repoint to a prior release. Approval required." },
   { name: "whatbox_torrent_add", title: "Add torrent", category: "torrents", mutating: true, risk: "reversible", summary: "Add a magnet/HTTP(S) torrent." },

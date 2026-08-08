@@ -16,6 +16,25 @@ test("parses local configuration without placing values in the repository", () =
   assert.equal(config.port, 22);
   assert.equal(config.sshKeyPath, "/Users/example/.ssh/whatbox-mcp");
   assert.deepEqual(config.allowedRoots, ["/home/example-user/files"]);
+  // Observation defaults to the whole slot while mutations stay narrower.
+  assert.deepEqual(config.observeRoots, ["/home/example-user"]);
+});
+
+test("keeps observe roots independent of mutation roots", () => {
+  const config = parseConfigValues(
+    {
+      ...baseValues,
+      WHATBOX_ALLOWED_ROOTS: "~/files",
+      WHATBOX_OBSERVE_ROOTS: "~/files,~/torrents"
+    },
+    "/Users/example"
+  );
+
+  assert.deepEqual(config.allowedRoots, ["/home/example-user/files"]);
+  assert.deepEqual(config.observeRoots, [
+    "/home/example-user/files",
+    "/home/example-user/torrents"
+  ]);
 });
 
 test("normalizes configured roots and removes duplicates", () => {
@@ -117,9 +136,18 @@ test("parses an optional torrent RPC configuration", () => {
   assert.deepEqual(config.torrentRpc, {
     client: "transmission",
     port: 9091,
+    socketPath: undefined,
     username: undefined,
     password: undefined
   });
+
+  // rtorrent needs no port: its SCGI endpoint is discovered on the slot.
+  const rtorrent = parseConfigValues({
+    ...baseValues,
+    WHATBOX_TORRENT_CLIENT: "rtorrent"
+  });
+  assert.equal(rtorrent.torrentRpc?.client, "rtorrent");
+  assert.equal(rtorrent.torrentRpc?.port, undefined);
 });
 
 test("requires a torrent RPC port when a torrent client is set", () => {

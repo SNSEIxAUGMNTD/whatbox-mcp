@@ -8,6 +8,8 @@ import {
   createHostVerifier,
   isSensitiveDirectoryPath,
   parseDfOutput,
+  parseHomeUsageOutput,
+  parseQuotaOutput,
   parseNginxBinaryAvailability,
   parseNginxConfigurationTest,
   parseServiceProcesses,
@@ -77,6 +79,34 @@ test("parses portable df output into bytes", () => {
     availableBytes: 768_000,
     usedPercent: 25
   });
+});
+
+test("parses account quota output and reports unavailable when unset", () => {
+  assert.deepEqual(
+    parseQuotaOutput(
+      "Disk quotas for user example (uid 1000):\n" +
+        "     Filesystem  blocks   quota   limit   grace   files   quota   limit\n" +
+        "      /dev/test  1000*    4000    5000            120       0       0\n"
+    ),
+    {
+      source: "quota",
+      usedBytes: 1_024_000,
+      softLimitBytes: 4_096_000,
+      hardLimitBytes: 5_120_000,
+      usedPercent: 25
+    }
+  );
+
+  assert.deepEqual(
+    parseQuotaOutput("Disk quotas for user example (uid 1000): none\n"),
+    {
+      source: "unavailable",
+      usedBytes: null,
+      softLimitBytes: null,
+      hardLimitBytes: null,
+      usedPercent: null
+    }
+  );
 });
 
 test("reports only allowlisted torrent-client process states", () => {
@@ -307,4 +337,10 @@ test("classifies SSH failures without returning raw error details", () => {
       transportCode: "EPERM"
     }
   );
+});
+
+test("parses a du total and rejects garbage", () => {
+  assert.equal(parseHomeUsageOutput("1396703940608\t/home/example\n"), 1396703940608);
+  assert.equal(parseHomeUsageOutput(""), null);
+  assert.equal(parseHomeUsageOutput("du: cannot access"), null);
 });

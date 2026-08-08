@@ -161,6 +161,7 @@ export interface TorrentSummary {
   percentDone: number;
   ratio: number;
   sizeBytes: number;
+  uploadedBytes: number;
   label: string | null;
 }
 
@@ -181,7 +182,7 @@ export type TorrentControlOperation =
 function requireTorrentRpc(config: WhatboxConfig): TorrentRpcConfig {
   if (!config.torrentRpc) {
     throw new Error(
-      "No torrent RPC is configured; set WHATBOX_TORRENT_CLIENT and WHATBOX_TORRENT_RPC_PORT"
+      "No torrent RPC is configured; set WHATBOX_TORRENT_CLIENT (rtorrent auto-discovers its endpoint; transmission/qbittorrent also need WHATBOX_TORRENT_RPC_PORT)"
     );
   }
   return config.torrentRpc;
@@ -241,7 +242,7 @@ class TransmissionClient {
       "utf8"
     );
     const doRequest = () =>
-      rpcRequest(this.ssh, this.rpc.port, {
+      rpcRequest(this.ssh, this.rpc.port ?? 0, {
         method: "POST",
         path: "/transmission/rpc",
         headers: {
@@ -292,6 +293,7 @@ async function transmissionStatus(
         "status",
         "percentDone",
         "uploadRatio",
+        "uploadedEver",
         "sizeWhenDone",
         "labels"
       ]
@@ -307,6 +309,7 @@ async function transmissionStatus(
     percentDone: Math.round(Number(torrent.percentDone ?? 0) * 1000) / 10,
     ratio: Math.max(0, Math.round(Number(torrent.uploadRatio ?? 0) * 100) / 100),
     sizeBytes: Number(torrent.sizeWhenDone ?? 0),
+    uploadedBytes: Number(torrent.uploadedEver ?? 0),
     label: Array.isArray(torrent.labels) && torrent.labels.length > 0
       ? trimName(torrent.labels[0])
       : null
@@ -338,7 +341,7 @@ class QbittorrentClient {
       `username=${encodeURIComponent(this.rpc.username ?? "")}&password=${encodeURIComponent(this.rpc.password ?? "")}`,
       "utf8"
     );
-    const response = await rpcRequest(this.ssh, this.rpc.port, {
+    const response = await rpcRequest(this.ssh, this.rpc.port ?? 0, {
       method: "POST",
       path: "/api/v2/auth/login",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -370,7 +373,7 @@ class QbittorrentClient {
           "utf8"
         )
       : undefined;
-    const response = await rpcRequest(this.ssh, this.rpc.port, {
+    const response = await rpcRequest(this.ssh, this.rpc.port ?? 0, {
       method,
       path,
       headers: {
@@ -416,6 +419,7 @@ async function qbittorrentStatus(
     percentDone: Math.round(Number(torrent.progress ?? 0) * 1000) / 10,
     ratio: Math.max(0, Math.round(Number(torrent.ratio ?? 0) * 100) / 100),
     sizeBytes: Number(torrent.size ?? 0),
+    uploadedBytes: Number(torrent.uploaded ?? 0),
     label: torrent.category ? trimName(torrent.category) : null
   }));
   return {
@@ -453,6 +457,9 @@ export async function getTorrentsStatus(
   config: WhatboxConfig
 ): Promise<TorrentsStatus> {
   const rpc = requireTorrentRpc(config);
+  if (rpc.client === "rtorrent") {
+    return rtorrentStatus(ssh, config, rpc);
+  }
   return rpc.client === "transmission"
     ? transmissionStatus(ssh, rpc)
     : qbittorrentStatus(ssh, rpc);
@@ -465,6 +472,10 @@ export async function addTorrent(
 ) {
   const rpc = requireTorrentRpc(config);
   const source = validateTorrentSource(input.magnetOrUrl);
+
+  if (rpc.client === "rtorrent") {
+    return rtorrentAdd(ssh, config, rpc, source, input.paused);
+  }
 
   if (rpc.client === "transmission") {
     const client = new TransmissionClient(ssh, rpc);
@@ -500,6 +511,10 @@ export async function controlTorrent(
   }
 ) {
   const rpc = requireTorrentRpc(config);
+
+  if (rpc.client === "rtorrent") {
+    return rtorrentControl(ssh, config, rpc, input);
+  }
 
   if (rpc.client === "transmission") {
     const client = new TransmissionClient(ssh, rpc);
@@ -567,6 +582,10 @@ export async function removeTorrent(
 ) {
   const rpc = requireTorrentRpc(config);
 
+  if (rpc.client === "rtorrent") {
+    return rtorrentRemove(ssh, config, rpc, input);
+  }
+
   if (rpc.client === "transmission") {
     const client = new TransmissionClient(ssh, rpc);
     const id = Number.parseInt(input.torrentId, 10);
@@ -588,4 +607,409 @@ export async function removeTorrent(
     deleteFiles: input.deleteData ? "true" : "false"
   });
   return { removed: true, dataDeleted: input.deleteData };
+}
+
+// rTorrent (SCGI + XML-RPC) -------------------------------------------------
+//
+// rTorrent exposes XML-RPC over a local SCGI endpoint (unix socket or
+// loopback port). Reached through the existing SSH connection it needs no
+// credentials at all: SSH is the security boundary, matching the rest of the
+// server. The public https://server/xmlrpc endpoint (account web password)
+// is deliberately never used.
+
+const RTORRENT_RC_MAX_BYTES = 16 * 1024;
+
+export interface RtorrentEndpoint {
+  kind: "unix" | "tcp";
+  path?: string;
+  port?: number;
+}
+
+export function parseRtorrentRc(
+  content: string,
+  home: string
+): RtorrentEndpoint | null {
+  const local = /^\s*(?:scgi_local|network\.scgi\.open_local)\s*=\s*(.+?)\s*$/m.exec(
+    content
+  );
+  if (local) {
+    const raw = local[1].replace(/^"|"$/g, "");
+    const path = raw === "~" || raw.startsWith("~/")
+      ? `${home}${raw.slice(1)}`
+      : raw;
+    return { kind: "unix", path };
+  }
+
+  const port = /^\s*(?:scgi_port|network\.scgi\.open_port)\s*=\s*(?:[\w.]*:)?(\d{2,5})\s*$/m.exec(
+    content
+  );
+  if (port) {
+    return { kind: "tcp", port: Number.parseInt(port[1], 10) };
+  }
+
+  return null;
+}
+
+function readRemoteFileBounded(
+  ssh: Client,
+  path: string,
+  maxBytes: number
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    ssh.sftp((error, sftp) => {
+      if (error) {
+        reject(new Error("Unable to open SFTP for endpoint discovery"));
+        return;
+      }
+      sftp.stat(path, (statError, stats) => {
+        if (statError || stats.size > maxBytes) {
+          sftp.end();
+          reject(new Error("The rTorrent configuration file is missing or oversized"));
+          return;
+        }
+        sftp.readFile(path, (readError, data) => {
+          sftp.end();
+          if (readError) {
+            reject(new Error("Unable to read the rTorrent configuration file"));
+            return;
+          }
+          resolve(data.toString("utf8"));
+        });
+      });
+    });
+  });
+}
+
+async function resolveRtorrentEndpoint(
+  ssh: Client,
+  config: WhatboxConfig,
+  rpc: TorrentRpcConfig
+): Promise<RtorrentEndpoint> {
+  if (rpc.socketPath) {
+    return { kind: "unix", path: rpc.socketPath };
+  }
+  if (rpc.port) {
+    return { kind: "tcp", port: rpc.port };
+  }
+  const home = `/home/${config.username}`;
+  const content = await readRemoteFileBounded(
+    ssh,
+    `${home}/.rtorrent.rc`,
+    RTORRENT_RC_MAX_BYTES
+  );
+  const endpoint = parseRtorrentRc(content, home);
+  if (!endpoint) {
+    throw new Error(
+      "No SCGI endpoint found in ~/.rtorrent.rc; set WHATBOX_TORRENT_RPC_SOCKET or WHATBOX_TORRENT_RPC_PORT"
+    );
+  }
+  return endpoint;
+}
+
+function openUnixTunnel(client: Client, socketPath: string): Promise<Duplex> {
+  return new Promise((resolve, reject) => {
+    client.openssh_forwardOutStreamLocal(socketPath, (error, stream) => {
+      if (error) {
+        reject(new Error("Unable to open the unix-socket RPC tunnel"));
+        return;
+      }
+      resolve(stream);
+    });
+  });
+}
+
+export function buildScgiRequest(body: Buffer): Buffer {
+  const headers = Buffer.from(
+    `CONTENT_LENGTH\0${body.length}\0SCGI\0${1}\0`,
+    "ascii"
+  );
+  return Buffer.concat([
+    Buffer.from(`${headers.length}:`, "ascii"),
+    headers,
+    Buffer.from(",", "ascii"),
+    body
+  ]);
+}
+
+function scgiRequest(stream: Duplex, body: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+
+    stream.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > MAX_RESPONSE_BYTES) {
+        stream.destroy();
+        reject(new Error("The SCGI response exceeded the bounded size"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on("error", () => reject(new Error("The SCGI stream failed")));
+    stream.on("close", () => {
+      const raw = Buffer.concat(chunks);
+      const headerEnd = raw.indexOf("\r\n\r\n");
+      resolve(headerEnd === -1 ? raw : raw.subarray(headerEnd + 4));
+    });
+    stream.end(buildScgiRequest(body));
+  });
+}
+
+function xmlEscape(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+export function buildXmlMethodCall(
+  method: string,
+  params: Array<string | number>
+) {
+  const rendered = params
+    .map((param) =>
+      typeof param === "number"
+        ? `<param><value><i8>${param}</i8></value></param>`
+        : `<param><value><string>${xmlEscape(param)}</string></value></param>`
+    )
+    .join("");
+  return Buffer.from(
+    `<?xml version="1.0"?><methodCall><methodName>${xmlEscape(method)}</methodName><params>${rendered}</params></methodCall>`,
+    "utf8"
+  );
+}
+
+type XmlRpcValue = string | number | boolean | XmlRpcValue[];
+
+// Minimal XML-RPC response parser for rTorrent's bounded vocabulary:
+// string / i4 / i8 / int / double / boolean / array. No external XML
+// dependency; input size is already capped by the transport.
+export function parseXmlRpcResponse(xml: string): XmlRpcValue {
+  if (xml.includes("<fault>")) {
+    const message = /<string>([\s\S]*?)<\/string>/.exec(xml);
+    throw new Error(
+      `rTorrent reported a fault: ${(message?.[1] ?? "unknown").slice(0, 200)}`
+    );
+  }
+
+  let cursor = 0;
+
+  function parseValue(): XmlRpcValue {
+    const open = xml.indexOf("<value>", cursor);
+    if (open === -1) {
+      throw new Error("The XML-RPC response was malformed");
+    }
+    cursor = open + "<value>".length;
+
+    const typed = /^\s*<(string|i4|i8|int|double|boolean|array)>/.exec(
+      xml.slice(cursor)
+    );
+    if (!typed) {
+      // Untyped <value> defaults to string per XML-RPC.
+      const end = xml.indexOf("</value>", cursor);
+      const raw = xml.slice(cursor, end);
+      cursor = end + "</value>".length;
+      return decodeXmlText(raw.trim());
+    }
+
+    const type = typed[1];
+    cursor += typed[0].length;
+
+    if (type === "array") {
+      const values: XmlRpcValue[] = [];
+      const dataOpen = xml.indexOf("<data>", cursor);
+      cursor = dataOpen + "<data>".length;
+      while (true) {
+        const nextValue = xml.indexOf("<value>", cursor);
+        const dataClose = xml.indexOf("</data>", cursor);
+        if (nextValue === -1 || (dataClose !== -1 && dataClose < nextValue)) {
+          cursor = dataClose + "</data>".length;
+          break;
+        }
+        values.push(parseValue());
+      }
+      const arrayClose = xml.indexOf("</array>", cursor);
+      const valueClose = xml.indexOf("</value>", arrayClose);
+      cursor = valueClose + "</value>".length;
+      return values;
+    }
+
+    const close = xml.indexOf(`</${type}>`, cursor);
+    const raw = xml.slice(cursor, close);
+    const valueClose = xml.indexOf("</value>", close);
+    cursor = valueClose + "</value>".length;
+
+    if (type === "string") {
+      return decodeXmlText(raw);
+    }
+    if (type === "boolean") {
+      return raw.trim() === "1";
+    }
+    return Number(raw.trim());
+  }
+
+  return parseValue();
+}
+
+function decodeXmlText(value: string) {
+  return value
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
+}
+
+async function rtorrentCall(
+  ssh: Client,
+  endpoint: RtorrentEndpoint,
+  method: string,
+  params: Array<string | number>
+): Promise<XmlRpcValue> {
+  const stream =
+    endpoint.kind === "unix"
+      ? await openUnixTunnel(ssh, endpoint.path ?? "")
+      : await openLoopbackTunnel(ssh, endpoint.port ?? 0);
+  const response = await scgiRequest(stream, buildXmlMethodCall(method, params));
+  return parseXmlRpcResponse(response.toString("utf8"));
+}
+
+export function mapRtorrentTorrent(row: XmlRpcValue[]): TorrentSummary {
+  const [hash, name, state, complete, sizeBytes, completedBytes, ratio, upTotal, label] =
+    row;
+  const size = Number(sizeBytes ?? 0);
+  return {
+    id: String(hash ?? ""),
+    name: trimName(name),
+    state:
+      Number(state) === 0
+        ? "stopped"
+        : Number(complete) === 1
+          ? "seeding"
+          : "downloading",
+    percentDone:
+      size > 0
+        ? Math.round((Number(completedBytes ?? 0) / size) * 1000) / 10
+        : 0,
+    ratio: Math.max(0, Math.round(Number(ratio ?? 0) / 10) / 100),
+    sizeBytes: size,
+    uploadedBytes: Number(upTotal ?? 0),
+    label: label ? trimName(safeDecodeUriComponent(String(label))) : null
+  };
+}
+
+function safeDecodeUriComponent(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+async function rtorrentStatus(
+  ssh: Client,
+  config: WhatboxConfig,
+  rpc: TorrentRpcConfig
+): Promise<TorrentsStatus> {
+  const endpoint = await resolveRtorrentEndpoint(ssh, config, rpc);
+
+  const rows = await rtorrentCall(ssh, endpoint, "d.multicall2", [
+    "",
+    "main",
+    "d.hash=",
+    "d.name=",
+    "d.state=",
+    "d.complete=",
+    "d.size_bytes=",
+    "d.completed_bytes=",
+    "d.ratio=",
+    "d.up.total=",
+    "d.custom1="
+  ]);
+  const upRate = await rtorrentCall(ssh, endpoint, "throttle.global_up.rate", []);
+  const downRate = await rtorrentCall(ssh, endpoint, "throttle.global_down.rate", []);
+
+  const rawRows = Array.isArray(rows) ? rows : [];
+  const torrents = rawRows
+    .filter((row): row is XmlRpcValue[] => Array.isArray(row))
+    .map(mapRtorrentTorrent)
+    // Most-uploaded first: the primary question a seedbox owner asks.
+    .sort((a, b) => b.uploadedBytes - a.uploadedBytes);
+
+  return {
+    client: "rtorrent",
+    torrentCount: torrents.length,
+    truncated: torrents.length > MAX_TORRENTS_RETURNED,
+    totals: {
+      downloadRateBps: Number(downRate ?? 0),
+      uploadRateBps: Number(upRate ?? 0)
+    },
+    torrents: torrents.slice(0, MAX_TORRENTS_RETURNED)
+  };
+}
+
+function requireRtorrentHash(torrentId: string) {
+  if (!/^[a-fA-F0-9]{40}$/.test(torrentId)) {
+    throw new Error("The rTorrent torrent id must be a 40-character info-hash");
+  }
+  return torrentId.toUpperCase();
+}
+
+export async function rtorrentAdd(
+  ssh: Client,
+  config: WhatboxConfig,
+  rpc: TorrentRpcConfig,
+  source: string,
+  paused: boolean
+) {
+  const endpoint = await resolveRtorrentEndpoint(ssh, config, rpc);
+  await rtorrentCall(ssh, endpoint, paused ? "load.normal" : "load.start", [
+    "",
+    source
+  ]);
+  return { added: true, duplicate: false, id: null, name: null };
+}
+
+export async function rtorrentControl(
+  ssh: Client,
+  config: WhatboxConfig,
+  rpc: TorrentRpcConfig,
+  input: { torrentId: string; operation: TorrentControlOperation; label?: string }
+) {
+  const endpoint = await resolveRtorrentEndpoint(ssh, config, rpc);
+  const hash = requireRtorrentHash(input.torrentId);
+
+  if (input.operation === "pause") {
+    await rtorrentCall(ssh, endpoint, "d.stop", [hash]);
+  } else if (input.operation === "resume") {
+    await rtorrentCall(ssh, endpoint, "d.start", [hash]);
+  } else if (input.operation === "set_label") {
+    await rtorrentCall(ssh, endpoint, "d.custom1.set", [
+      hash,
+      encodeURIComponent(input.label ?? "")
+    ]);
+  } else {
+    throw new Error(
+      "rTorrent does not support per-torrent ratio limits through this tool; use ruTorrent's ratio groups"
+    );
+  }
+  return { completed: true, operation: input.operation };
+}
+
+export async function rtorrentRemove(
+  ssh: Client,
+  config: WhatboxConfig,
+  rpc: TorrentRpcConfig,
+  input: { torrentId: string; deleteData: boolean }
+) {
+  if (input.deleteData) {
+    throw new Error(
+      "rTorrent cannot delete data through d.erase; remove the torrent first, then quarantine the files"
+    );
+  }
+  const endpoint = await resolveRtorrentEndpoint(ssh, config, rpc);
+  await rtorrentCall(ssh, endpoint, "d.erase", [
+    requireRtorrentHash(input.torrentId)
+  ]);
+  return { removed: true, dataDeleted: false };
 }

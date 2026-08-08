@@ -182,6 +182,14 @@ export interface StorageStatus {
   usedPercent: number;
 }
 
+export interface AccountQuotaStatus {
+  source: "quota" | "du" | "unavailable";
+  usedBytes: number | null;
+  softLimitBytes: number | null;
+  hardLimitBytes: number | null;
+  usedPercent: number | null;
+}
+
 export type TorrentClientName =
   | "rtorrent"
   | "deluge"
@@ -534,9 +542,9 @@ export async function listWhatboxDirectory(
   relativePath: string,
   limit: number
 ) {
-  const root = config.allowedRoots[rootIndex];
+  const root = config.observeRoots[rootIndex];
   if (!root) {
-    throw new Error("Unknown allowed-root index");
+    throw new Error("Unknown observe-root index");
   }
 
   const candidate = resolveAllowedPath(root, relativePath);
@@ -574,11 +582,21 @@ const SENSITIVE_DIRECTORY_NAMES = new Set([
   ".aws",
   ".gnupg",
   ".kube",
+  ".password-store",
+  ".pki",
   ".ssh",
   "credentials",
   "keyrings",
   "secrets",
-  "whatbox-mcp"
+  "whatbox-mcp",
+  // Observation covers the whole slot, so exclude the app directories that
+  // hold plaintext or recoverable credentials on a Whatbox slot.
+  ".irssi",
+  ".znc",
+  "autodl-irssi",
+  "deluge",
+  "rclone",
+  "znc"
 ]);
 
 function isSensitiveDirectoryName(name: string) {
@@ -624,9 +642,9 @@ export async function mapWhatboxDirectory(
   maxDepth: number,
   maxNodes: number
 ): Promise<DirectoryMap> {
-  const root = config.allowedRoots[rootIndex];
+  const root = config.observeRoots[rootIndex];
   if (!root) {
-    throw new Error("Unknown allowed-root index");
+    throw new Error("Unknown observe-root index");
   }
   if (isSensitiveDirectoryPath(root)) {
     throw new Error("Sensitive directories cannot be mapped");
@@ -818,7 +836,7 @@ export async function getWhatboxStorageStatus(
 ) {
   const statuses: StorageStatus[] = [];
 
-  for (const [rootIndex, rootPath] of config.allowedRoots.entries()) {
+  for (const [rootIndex, rootPath] of config.observeRoots.entries()) {
     const output = await executeFixedReadOnlyQuery(
       client,
       `LC_ALL=C df -Pk -- ${quotePosixShell(rootPath)}`
@@ -827,6 +845,94 @@ export async function getWhatboxStorageStatus(
   }
 
   return statuses;
+}
+
+export function parseQuotaOutput(output: string): AccountQuotaStatus {
+  for (const line of output.split(/\r?\n/)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 4 || !fields[0].startsWith("/")) {
+      continue;
+    }
+
+    // blocks carries a trailing "*" when the soft limit is already exceeded.
+    const blockKiB = Number.parseInt(fields[1].replace("*", ""), 10);
+    const softKiB = Number.parseInt(fields[2], 10);
+    const hardKiB = Number.parseInt(fields[3], 10);
+    if ([blockKiB, softKiB, hardKiB].some(Number.isNaN)) {
+      continue;
+    }
+
+    const limitKiB = softKiB > 0 ? softKiB : hardKiB;
+    return {
+      source: "quota",
+      usedBytes: blockKiB * 1024,
+      softLimitBytes: softKiB * 1024,
+      hardLimitBytes: hardKiB * 1024,
+      usedPercent:
+        limitKiB > 0 ? Math.round((blockKiB / limitKiB) * 100) : null
+    };
+  }
+
+  return {
+    source: "unavailable",
+    usedBytes: null,
+    softLimitBytes: null,
+    hardLimitBytes: null,
+    usedPercent: null
+  };
+}
+
+export function parseHomeUsageOutput(output: string): number | null {
+  const total = Number.parseInt(output.trim().split(/\s+/)[0] ?? "", 10);
+  return Number.isNaN(total) ? null : total;
+}
+
+export async function getWhatboxAccountQuota(
+  client: Client,
+  config: WhatboxConfig
+) {
+  const quota = parseQuotaOutput(
+    await executeFixedReadOnlyQuery(
+      client,
+      "LC_ALL=C quota -w 2>/dev/null || true"
+    )
+  );
+  if (quota.source === "quota") {
+    return { ...quota, measuredMs: null };
+  }
+
+  // Whatbox does not enforce filesystem quotas, so fall back to the disk walk
+  // their own wiki recommends. Idle I/O and lowest CPU priority keep this
+  // courteous on shared storage; ionice is not guaranteed to exist. A single
+  // walk only: `du A || du B` would rewalk everything whenever an actively
+  // seeding file vanished mid-scan.
+  const home = quotePosixShell(`/home/${config.username}`);
+  const startedAt = Date.now();
+  const { code, output } = await executeFixedCommandWithStatus(
+    client,
+    // -H dereferences the argument itself: on Whatbox /home/<user> can be a
+    // symlink into the storage array, and without -H du measures the link (0
+    // bytes, instantly) instead of the account's data.
+    `LC_ALL=C nice -n 19 sh -c 'command -v ionice >/dev/null 2>&1 && exec ionice -c3 du -sxH -B1 -- "$0"; exec du -sxH -B1 -- "$0"' ${home} 2>/dev/null`
+  );
+  // Exit 1 means files changed or were unreadable during the walk — routine
+  // on a box that is actively seeding — and the total is still printed.
+  const usedBytes =
+    code === 0 || code === 1 ? parseHomeUsageOutput(output) : null;
+  const measuredMs = Date.now() - startedAt;
+
+  if (usedBytes === null) {
+    return { ...quota, measuredMs };
+  }
+
+  return {
+    source: "du" as const,
+    usedBytes,
+    softLimitBytes: null,
+    hardLimitBytes: null,
+    usedPercent: null,
+    measuredMs
+  };
 }
 
 const TORRENT_CLIENT_PROCESS_NAMES: Record<TorrentClientName, Set<string>> = {

@@ -81,6 +81,7 @@ test("removes configured remote paths from storage tool results", () => {
   assert.deepEqual(result, [
     {
       rootIndex: 0,
+      measures: "shared_filesystem",
       totalBytes: 100,
       usedBytes: 20,
       availableBytes: 80,
