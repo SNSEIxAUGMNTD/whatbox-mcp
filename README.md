@@ -6,7 +6,7 @@
 
 [![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-local%20stdio-5C5CFF)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.10.0-12866f)](package.json)
+[![Version](https://img.shields.io/badge/version-0.11.0-12866f)](package.json)
 [![Tests](https://img.shields.io/badge/tests-53%20passing-2ea043)](src)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -18,7 +18,7 @@ process state, directory topology, configuration metadata, website-hosting
 readiness, and bounded userland Nginx diagnostics. It also validates local
 static-site sources and creates signed, short-lived deployment-plan previews.
 
-As of `0.10.0` it can additionally perform **approval-gated mutations** —
+As of `0.11.0` it can additionally perform **approval-gated mutations** —
 upload, download, move, mkdir, quarantine-based delete and second-approval
 purge, configuration backup, service start/stop/restart, atomic website
 deployment with rollback, and torrent add/control/remove over an SSH loopback
@@ -45,7 +45,7 @@ clear and mechanically enforced. This server is designed around four rules:
 
 ## Current release
 
-Version `0.10.0` includes everything from the read-only line —
+Version `0.11.0` includes everything from the read-only line —
 
 - a local MCP stdio server for Node.js 20+;
 - pinned SSH host verification and SSH-agent authentication;
@@ -166,7 +166,8 @@ selection.
 | `whatbox_configuration_status` | Check Local Whatbox Configuration | Reports configuration completeness without returning values. |
 | `whatbox_connection_status` | Check Whatbox SSH Connection | Tests pinned SSH connectivity and returns only safe diagnostics. |
 | `whatbox_operational_snapshot` | Get Consolidated Whatbox Operational Snapshot | Combines storage pressure, service metadata, website readiness, recommendations, and explicit mutation state. |
-| `whatbox_storage_status` | Inspect Whatbox Storage Capacity | Returns capacity by root index without exposing configured remote paths. |
+| `whatbox_storage_status` | Inspect Whatbox Storage Capacity | Returns shared-filesystem capacity by root index (labeled `shared_filesystem`) without exposing configured remote paths. |
+| `whatbox_account_quota` | Inspect Whatbox Account Quota | Reports the account's own disk usage against its plan (`quota`, with a courteous `nice`/`ionice` `du` fallback), separate from the shared array. |
 | `whatbox_list_directory` | List an Allowed Whatbox Directory | Lists bounded entries below an allowed root; rejects absolute paths and escapes. |
 | `whatbox_structure_map` | Map an Allowed Whatbox Directory | Produces a bounded directory-only map and Mermaid diagram without file-content reads. |
 | `whatbox_torrent_clients_status` | Inspect Supported Torrent Clients | Reports running state for rTorrent, Deluge, Transmission, and qBittorrent only. |
@@ -189,6 +190,7 @@ selection.
 | `whatbox_service_control` | reversible / destructive | Starts (reversible) or stops/restarts (approval) an allowlisted service. |
 | `whatbox_website_deploy_execute` | reversible | Stages, checksum-verifies, atomically activates, and health-checks a release. |
 | `whatbox_website_rollback` | destructive | Repoints to a prior release (approval). |
+| `whatbox_run_command` | destructive | Runs one composed shell command with exact-text human approval, a destructive-shape denylist, bounded output, and a timeout. Requires `WHATBOX_SHELL_ENABLED=true`. |
 | `whatbox_torrent_add` | reversible | Adds a magnet/HTTP(S) torrent. |
 | `whatbox_torrent_control` | reversible | Pauses/resumes/labels/ratio-limits one torrent. |
 | `whatbox_quarantine_path` | destructive | Soft-deletes a path into dated quarantine (approval). |

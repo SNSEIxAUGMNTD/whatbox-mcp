@@ -692,18 +692,27 @@ async function resolveRtorrentEndpoint(
     return { kind: "tcp", port: rpc.port };
   }
   const home = `/home/${config.username}`;
-  const content = await readRemoteFileBounded(
-    ssh,
-    `${home}/.rtorrent.rc`,
-    RTORRENT_RC_MAX_BYTES
-  );
-  const endpoint = parseRtorrentRc(content, home);
-  if (!endpoint) {
-    throw new Error(
-      "No SCGI endpoint found in ~/.rtorrent.rc; set WHATBOX_TORRENT_RPC_SOCKET or WHATBOX_TORRENT_RPC_PORT"
-    );
+  // Whatbox's managed rTorrent keeps its config at ~/.config/rtorrent/
+  // per their wiki; ~/.rtorrent.rc is the legacy location.
+  const candidates = [
+    `${home}/.config/rtorrent/rtorrent.rc`,
+    `${home}/.rtorrent.rc`
+  ];
+  for (const path of candidates) {
+    let content: string;
+    try {
+      content = await readRemoteFileBounded(ssh, path, RTORRENT_RC_MAX_BYTES);
+    } catch {
+      continue;
+    }
+    const endpoint = parseRtorrentRc(content, home);
+    if (endpoint) {
+      return endpoint;
+    }
   }
-  return endpoint;
+  throw new Error(
+    "No SCGI endpoint found in ~/.config/rtorrent/rtorrent.rc or ~/.rtorrent.rc; set WHATBOX_TORRENT_RPC_SOCKET or WHATBOX_TORRENT_RPC_PORT"
+  );
 }
 
 function openUnixTunnel(client: Client, socketPath: string): Promise<Duplex> {

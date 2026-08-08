@@ -4,11 +4,38 @@
 
 - Working directory: the repository root containing this document
 - Package: `whatbox-mcp`
-- Current version: `0.10.0`
+- Current version: `0.11.0`
 - Runtime: Node.js 20 or newer, TypeScript, ESM
 - Transport: local MCP stdio
 - Baseline commit: `f0c95db` on `main`. Inspect `git status` before editing and
   preserve all working-tree changes made after that commit.
+
+## 0.11.0 update
+
+- rTorrent adapter in `src/torrent.ts`: XML-RPC over SCGI through the existing
+  SSH connection (unix socket via `openssh_forwardOutStreamLocal`, or loopback
+  TCP). Endpoint auto-discovered from `~/.config/rtorrent/rtorrent.rc` (the
+  Whatbox managed location) falling back to `~/.rtorrent.rc`; overrides:
+  `WHATBOX_TORRENT_RPC_SOCKET` / `WHATBOX_TORRENT_RPC_PORT`. Zero stored
+  torrent credentials; status sorted by `d.up.total`. Per-torrent ratio limits
+  and delete-data-on-remove intentionally error for rtorrent.
+- `uploadedBytes` added to `TorrentSummary` for all clients.
+- `whatbox_account_quota` in `src/whatbox.ts`: `quota -w` first, then
+  `nice -n 19` + `ionice -c3` `du -sxH -B1` on the slot home (single walk,
+  exit code 1 tolerated, `-H` because `/home/<user>` can be a symlink into the
+  array). Storage results now carry `measures: "shared_filesystem"`.
+- Observe/mutate scope split in `src/config.ts`: `WHATBOX_OBSERVE_ROOTS`
+  (default: slot home) drives `list_directory` / `structure_map` /
+  `storage_status`; mutations remain bound to `WHATBOX_ALLOWED_ROOTS`.
+  Sensitive-name exclusions extended (rclone, deluge, znc, irssi, pki,
+  password-store). Known gap: `rootIndex` indexes observe roots in read tools
+  but allowed roots in mutation tools (M1, open).
+- `whatbox_run_command` in `src/server-mutations.ts` behind
+  `WHATBOX_SHELL_ENABLED` + mutations + per-call exact-text approval:
+  denylist of destructive shapes (`assertShellCommandAllowed`), bounded
+  stdout+stderr, enforced timeout, audit-logged as `run_command`.
+- Server instructions render live mutation/shell state
+  (`describeMutationState` in `src/server.ts`).
 
 ## 0.10.0 update
 

@@ -102,8 +102,10 @@ the Linux steps inside your distro; run your MCP client from inside WSL too.
 - To allow changes, add to `local.env`:
   - `WHATBOX_MUTATIONS_ENABLED=true` — master switch (omit it to stay read-only)
   - `WHATBOX_DOWNLOAD_DIR=~/Downloads/whatbox` — where downloads/backups land
-  - For torrents: `WHATBOX_TORRENT_CLIENT` (`transmission` or `qbittorrent`)
-    and `WHATBOX_TORRENT_RPC_PORT` (plus `..._USERNAME` / `..._PASSWORD` if set)
+  - For torrents: `WHATBOX_TORRENT_CLIENT` (`rtorrent`, `transmission`, or
+    `qbittorrent`). `rtorrent` needs nothing else — the SCGI endpoint is
+    discovered from the slot's rtorrent.rc over SSH. The other two also need
+    `WHATBOX_TORRENT_RPC_PORT` (plus `..._USERNAME` / `..._PASSWORD` if set)
 - Safety that always holds, even in agent auto-mode:
   - Reversible actions (upload, move, mkdir, backup, deploy, torrent add/control)
     run once a signed plan is created.
