@@ -6,10 +6,12 @@ const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_TORRENTS_RETURNED = 200;
 const MAX_NAME_LENGTH = 200;
 const MAX_URI_LENGTH = 4096;
-// A local SCGI round-trip is near-instant; a wedged rTorrent must not hang
-// the tool. The enclosing SSH client is torn down per call, which reaps any
-// stream a rejection leaves behind.
-const RTORRENT_TIMEOUT_MS = 20_000;
+// A local RPC round-trip (SCGI for rTorrent, HTTP WebUI for transmission /
+// qBittorrent) is near-instant; a wedged daemon must not hang the tool.
+// SSH-level keepalive only catches a dead connection, not an app that accepts
+// the tunnel then never replies, so these paths need their own deadline. The
+// enclosing per-call SSH client teardown reaps any stream a rejection leaves.
+const RPC_TIMEOUT_MS = 20_000;
 
 export function withTimeout<T>(
   operation: Promise<T>,
@@ -82,7 +84,8 @@ function httpRequestOverTunnel(
     path: string;
     headers?: Record<string, string>;
     body?: Buffer;
-  }
+  },
+  timeoutMs = RPC_TIMEOUT_MS
 ): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
     const headers: Record<string, string> = {
@@ -103,14 +106,18 @@ function httpRequestOverTunnel(
     const received: Buffer[] = [];
     let receivedBytes = 0;
     let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
 
     const fail = (message: string) => {
       if (!settled) {
         settled = true;
+        clearTimeout(timer);
         stream.destroy();
         reject(new Error(message));
       }
     };
+
+    timer = setTimeout(() => fail("The RPC request timed out"), timeoutMs);
 
     stream.on("data", (chunk: Buffer) => {
       receivedBytes += chunk.length;
@@ -126,6 +133,7 @@ function httpRequestOverTunnel(
         return;
       }
       settled = true;
+      clearTimeout(timer);
       const raw = Buffer.concat(received);
       const headerEnd = raw.indexOf("\r\n\r\n");
       if (headerEnd === -1) {
@@ -172,7 +180,11 @@ async function rpcRequest(
   port: number,
   request: Parameters<typeof httpRequestOverTunnel>[1]
 ) {
-  const stream = await openLoopbackTunnel(client, port);
+  const stream = await withTimeout(
+    openLoopbackTunnel(client, port),
+    RPC_TIMEOUT_MS,
+    "Timed out opening the torrent RPC tunnel"
+  );
   return httpRequestOverTunnel(stream, request);
 }
 
@@ -727,7 +739,7 @@ async function resolveRtorrentEndpoint(
     try {
       content = await withTimeout(
         readRemoteFileBounded(ssh, path, RTORRENT_RC_MAX_BYTES),
-        RTORRENT_TIMEOUT_MS,
+        RPC_TIMEOUT_MS,
         "Timed out reading the rTorrent configuration file"
       );
     } catch {
@@ -771,7 +783,7 @@ export function buildScgiRequest(body: Buffer): Buffer {
 function scgiRequest(
   stream: Duplex,
   body: Buffer,
-  timeoutMs = RTORRENT_TIMEOUT_MS
+  timeoutMs = RPC_TIMEOUT_MS
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -934,7 +946,7 @@ async function rtorrentCall(
     endpoint.kind === "unix"
       ? openUnixTunnel(ssh, endpoint.path ?? "")
       : openLoopbackTunnel(ssh, endpoint.port ?? 0),
-    RTORRENT_TIMEOUT_MS,
+    RPC_TIMEOUT_MS,
     "Timed out opening the rTorrent RPC endpoint"
   );
   const response = await scgiRequest(stream, buildXmlMethodCall(method, params));

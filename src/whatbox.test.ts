@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 import {
+  executeFixedCommandWithStatus,
   WhatboxConnectionError,
   classifySshConnectionError,
   createDirectoryMapMermaid,
@@ -336,6 +338,35 @@ test("classifies SSH failures without returning raw error details", () => {
       stage: "tcp_connection",
       transportCode: "EPERM"
     }
+  );
+});
+
+test("executeFixedCommandWithStatus times out a command that never closes", async () => {
+  // A fake channel that opens but never emits "close" — the hung-command case
+  // SSH keepalive cannot catch because the connection stays healthy.
+  const hangingClient = {
+    exec(_command: string, cb: (error: null, stream: unknown) => void) {
+      const stream = new EventEmitter() as EventEmitter & {
+        stderr: EventEmitter & { resume: () => void };
+        destroy: () => void;
+        close: () => void;
+      };
+      stream.stderr = Object.assign(new EventEmitter(), { resume() {} });
+      stream.destroy = () => {};
+      stream.close = () => {};
+      cb(null, stream);
+    }
+  };
+
+  await assert.rejects(
+    executeFixedCommandWithStatus(
+      hangingClient as unknown as Parameters<
+        typeof executeFixedCommandWithStatus
+      >[0],
+      "sleep 999",
+      20
+    ),
+    /timed out/
   );
 });
 

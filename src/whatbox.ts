@@ -5,6 +5,11 @@ import { Client, type ConnectConfig, type SFTPWrapper } from "ssh2";
 import type { WhatboxConfig } from "./config.js";
 
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
+// A fixed read-only query is fast; this bounds a command that hangs while the
+// SSH connection stays healthy (keepalive only catches a dead connection, not
+// a command that never exits). The account-quota du walk passes a larger budget.
+const FIXED_COMMAND_TIMEOUT_MS = 60_000;
+const ACCOUNT_QUOTA_TIMEOUT_MS = 180_000;
 const MAX_ERROR_LOG_SAMPLE_BYTES = 32 * 1024;
 
 export type ConnectionFailure =
@@ -752,7 +757,8 @@ export function quotePosixShell(value: string) {
  */
 export function executeFixedCommandWithStatus(
   client: Client,
-  command: string
+  command: string,
+  timeoutMs = FIXED_COMMAND_TIMEOUT_MS
 ): Promise<{ code: number; output: string }> {
   return new Promise((resolve, reject) => {
     client.exec(command, (error, stream) => {
@@ -764,6 +770,23 @@ export function executeFixedCommandWithStatus(
       const output: Buffer[] = [];
       let outputBytes = 0;
       let failed = false;
+      let settled = false;
+
+      const finish = (action: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        action();
+      };
+
+      const timer = setTimeout(() => {
+        finish(() => {
+          stream.destroy();
+          reject(new Error("The fixed command timed out"));
+        });
+      }, timeoutMs);
 
       stream.on("data", (chunk: Buffer) => {
         outputBytes += chunk.length;
@@ -775,13 +798,15 @@ export function executeFixedCommandWithStatus(
         output.push(chunk);
       });
       stream.on("close", (code: number | undefined) => {
-        if (failed) {
-          reject(new Error("The fixed command produced excessive output"));
-          return;
-        }
-        resolve({
-          code: typeof code === "number" ? code : -1,
-          output: Buffer.concat(output).toString("utf8")
+        finish(() => {
+          if (failed) {
+            reject(new Error("The fixed command produced excessive output"));
+            return;
+          }
+          resolve({
+            code: typeof code === "number" ? code : -1,
+            output: Buffer.concat(output).toString("utf8")
+          });
         });
       });
       stream.stderr.resume();
@@ -913,7 +938,10 @@ export async function getWhatboxAccountQuota(
     // -H dereferences the argument itself: on Whatbox /home/<user> can be a
     // symlink into the storage array, and without -H du measures the link (0
     // bytes, instantly) instead of the account's data.
-    `LC_ALL=C nice -n 19 sh -c 'command -v ionice >/dev/null 2>&1 && exec ionice -c3 du -sxH -B1 -- "$0"; exec du -sxH -B1 -- "$0"' ${home} 2>/dev/null`
+    `LC_ALL=C nice -n 19 sh -c 'command -v ionice >/dev/null 2>&1 && exec ionice -c3 du -sxH -B1 -- "$0"; exec du -sxH -B1 -- "$0"' ${home} 2>/dev/null`,
+    // A full-slot walk under idle I/O priority can take far longer than a
+    // normal fixed query, so give it a generous ceiling rather than the default.
+    ACCOUNT_QUOTA_TIMEOUT_MS
   );
   // Exit 1 means files changed or were unreadable during the walk — routine
   // on a box that is actively seeding — and the total is still printed.

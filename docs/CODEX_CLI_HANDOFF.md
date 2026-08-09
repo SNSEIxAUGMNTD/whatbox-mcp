@@ -4,11 +4,29 @@
 
 - Working directory: the repository root containing this document
 - Package: `whatbox-mcp`
-- Current version: `0.11.1`
+- Current version: `0.11.2`
 - Runtime: Node.js 20 or newer, TypeScript, ESM
 - Transport: local MCP stdio
 - Baseline commit: `f0c95db` on `main`. Inspect `git status` before editing and
   preserve all working-tree changes made after that commit.
+
+## 0.11.2 update
+
+- Timeout sweep across every remote wait that SSH keepalive cannot cover
+  (a command/app that hangs while the connection stays healthy):
+  - `executeFixedCommandWithStatus` now enforces a duration timeout
+    (default 60s) — this backs every fixed read-only query; the account
+    -quota du walk passes a larger 180s budget.
+  - The transmission/qBittorrent HTTP path gained a timeout in
+    `httpRequestOverTunnel` and a `withTimeout` around its loopback tunnel
+    open, matching the rTorrent SCGI path. The shared constant is now
+    `RPC_TIMEOUT_MS` (was `RTORRENT_TIMEOUT_MS`).
+  - Connection-level `readyTimeout` (15s) + keepalive (10s x2) already
+    bound connect and dead-connection detection for SFTP/exec.
+  - Known residual: a bulk SFTP transfer that stalls while the connection
+    stays alive is not stall-detected (bounded only by size/free-space
+    checks + keepalive). Left as-is; documented here.
+- Tests: +1 (executor times out a command that never closes). 69 passing.
 
 ## 0.11.1 update
 
