@@ -48,7 +48,12 @@ test("advertises read-only and gated mutation capabilities", () => {
   assert.ok(
     capabilities.agentInterfaces.resources.includes("whatbox://guide/tools")
   );
-  assert.match(capabilities.safetyModel[0], /No generic remote shell tool/);
+  assert.match(capabilities.safetyModel[0], /whatbox_run_command.*human approval/);
+  assert.ok(
+    capabilities.safetyModel.some((item) =>
+      item.includes("SHA-256-pinned manifests")
+    )
+  );
   assert.ok(
     capabilities.safetyModel.some((item) =>
       item.includes("Mutations are disabled unless")

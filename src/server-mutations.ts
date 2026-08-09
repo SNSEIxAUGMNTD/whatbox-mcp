@@ -11,9 +11,17 @@ import {
 } from "./mutation.js";
 import { withWhatboxClient } from "./whatbox.js";
 import {
+  getAppManifest,
+  listAppIds,
+  buildInstallScript,
+  type InstallContext
+} from "./apps.js";
+import {
   backupWhatboxConfiguration,
   BACKUP_TARGETS,
   assertShellCommandAllowed,
+  installWhatboxApp,
+  uninstallWhatboxApp,
   controlWhatboxService,
   runApprovedShellCommand,
   SHELL_MAX_TIMEOUT_SECONDS,
@@ -469,6 +477,123 @@ export function registerMutationTools(server: McpServer) {
               client,
               assertShellCommandAllowed(input.command),
               input.timeoutSeconds * 1000
+            )
+          )
+      )
+  );
+
+  // -- App install templates -----------------------------------------------
+
+  function buildAppInstallContext(
+    config: WhatboxConfig,
+    port?: number,
+    musicFolder?: string
+  ): InstallContext {
+    const home = `/home/${config.username}`;
+    return {
+      home,
+      port,
+      musicFolder: musicFolder ? `${home}/${musicFolder}` : undefined
+    };
+  }
+
+  server.registerTool(
+    "whatbox_app_install",
+    {
+      title: "Install an App from a Pinned Template",
+      annotations: MUTATION_ANNOTATIONS,
+      description:
+        "Install a curated app from a committed, SHA-256-pinned manifest. Downloads the pinned artifact on the slot, verifies its checksum before extracting or running anything, never overwrites an existing install, and registers it (screen + crontab). Requires human approval; the exact install script is recorded in the audit log.",
+      inputSchema: z.object({
+        appId: z.enum(listAppIds() as [string, ...string[]]),
+        port: z.number().int().min(10000).max(32767).optional(),
+        musicFolder: z
+          .string()
+          .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$/)
+          .optional()
+      })
+    },
+    async (input, ctx) =>
+      runGated(
+        ctx as MutationContextLike,
+        (config) => {
+          const manifest = getAppManifest(input.appId);
+          if (!manifest) {
+            throw new Error("Unknown app id");
+          }
+          if (manifest.service?.port && !input.port) {
+            throw new Error(
+              "This app runs a service and needs a port (10000-32767)"
+            );
+          }
+          const context = buildAppInstallContext(
+            config,
+            input.port,
+            input.musicFolder
+          );
+          const artifact = manifest.fetch.artifact;
+          return {
+            action: "app_install" as const,
+            risk: "destructive" as const,
+            summary: `install ${manifest.name} ${manifest.version}`,
+            canonicalTargets: [
+              `app_install:${manifest.id}@${manifest.version}`
+            ],
+            displayTargets: [
+              `${manifest.name} ${manifest.version} — ${artifact.url} (sha256 ${artifact.sha256.slice(0, 12)}…)`
+            ],
+            // The exact server-authored install script is the forensic record.
+            auditDetail: buildInstallScript(manifest, context),
+            requiresApproval: true
+          };
+        },
+        (config) =>
+          withWhatboxClient(config, (client) =>
+            installWhatboxApp(
+              client,
+              config,
+              getAppManifest(input.appId)!,
+              buildAppInstallContext(config, input.port, input.musicFolder)
+            )
+          )
+      )
+  );
+
+  server.registerTool(
+    "whatbox_app_uninstall",
+    {
+      title: "Uninstall a Template-Installed App",
+      annotations: MUTATION_ANNOTATIONS,
+      description:
+        "Reverse a template install: stop the process, remove only this app's cron lines, and move its files into a dated home-level quarantine (not deleted). Requires human approval.",
+      inputSchema: z.object({
+        appId: z.enum(listAppIds() as [string, ...string[]])
+      })
+    },
+    async (input, ctx) =>
+      runGated(
+        ctx as MutationContextLike,
+        (config) => {
+          const manifest = getAppManifest(input.appId);
+          if (!manifest) {
+            throw new Error("Unknown app id");
+          }
+          return {
+            action: "app_uninstall" as const,
+            risk: "destructive" as const,
+            summary: `uninstall ${manifest.name}`,
+            canonicalTargets: [`app_uninstall:${manifest.id}`],
+            displayTargets: [`${manifest.name} (stop, de-cron, quarantine files)`],
+            requiresApproval: true
+          };
+        },
+        (config) =>
+          withWhatboxClient(config, (client) =>
+            uninstallWhatboxApp(
+              client,
+              config,
+              getAppManifest(input.appId)!,
+              buildAppInstallContext(config)
             )
           )
       )

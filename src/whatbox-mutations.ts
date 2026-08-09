@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
+  buildInstallScript,
+  buildUninstallScript,
+  type AppManifest,
+  type InstallContext
+} from "./apps.js";
+import {
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -1498,4 +1504,65 @@ export function runApprovedShellCommand(
       });
     });
   });
+}
+
+// -- App install templates ---------------------------------------------------
+
+const APP_INSTALL_TIMEOUT_MS = 300_000;
+
+function mapInstallFailure(output: string, code: number): string {
+  if (output.includes("already-installed")) {
+    return "The app is already installed; remove it first to reinstall.";
+  }
+  if (output.includes("FAILED") || output.includes("sha256sum")) {
+    return "The downloaded artifact failed SHA-256 verification; install aborted before extraction.";
+  }
+  return `The install did not complete (exit ${code}).`;
+}
+
+export async function installWhatboxApp(
+  client: Client,
+  config: WhatboxConfig,
+  manifest: AppManifest,
+  context: InstallContext
+) {
+  // Never-overwrite pre-check, for a clean error before the script runs. The
+  // script re-checks the marker under `set -e`, so this is belt-and-braces.
+  const sftp = await openSftp(client);
+  let markerExists: unknown;
+  try {
+    markerExists = await lstatRemote(sftp, `${context.home}/${manifest.marker}`);
+  } finally {
+    sftp.end();
+  }
+  if (markerExists) {
+    throw new Error(`${manifest.name} is already installed`);
+  }
+
+  const { code, output } = await executeFixedCommandWithStatus(
+    client,
+    buildInstallScript(manifest, context),
+    APP_INSTALL_TIMEOUT_MS
+  );
+  if (code !== 0 || !output.includes("INSTALL_OK")) {
+    throw new Error(mapInstallFailure(output, code));
+  }
+  return { installed: true, id: manifest.id, version: manifest.version };
+}
+
+export async function uninstallWhatboxApp(
+  client: Client,
+  config: WhatboxConfig,
+  manifest: AppManifest,
+  context: InstallContext
+) {
+  const { code, output } = await executeFixedCommandWithStatus(
+    client,
+    buildUninstallScript(manifest, context),
+    APP_INSTALL_TIMEOUT_MS
+  );
+  if (code !== 0 || !output.includes("UNINSTALL_OK")) {
+    throw new Error(`The uninstall did not complete cleanly (exit ${code}).`);
+  }
+  return { removed: true, id: manifest.id };
 }

@@ -4,11 +4,31 @@
 
 - Working directory: the repository root containing this document
 - Package: `whatbox-mcp`
-- Current version: `0.11.2`
+- Current version: `0.12.0`
 - Runtime: Node.js 20 or newer, TypeScript, ESM
 - Transport: local MCP stdio
 - Baseline commit: `f0c95db` on `main`. Inspect `git status` before editing and
   preserve all working-tree changes made after that commit.
+
+## 0.12.0 update
+
+- App install templates (`src/apps.ts`): committed, SHA-256-pinned manifests
+  + pure script builders. New tools: `whatbox_app_catalog` (read-only),
+  `whatbox_app_install` and `whatbox_app_uninstall` (destructive, gated).
+  Install downloads the pinned artifact on the slot, runs `sha256sum -c`
+  BEFORE extraction, refuses to overwrite an existing install (marker check),
+  and registers services the wiki way (screen + `@reboot`/`*/5` crontab tagged
+  `# whatbox-mcp:<id>`). Uninstall stops the process, strips only this app's
+  cron lines, and moves files to `~/.whatbox-quarantine/apps/<date>` (never rm).
+  The exact install script is recorded via the S2 `auditDetail` field.
+- Archetype scope: binary-tarball / zip / raw-binary only (linux-amd64).
+  Python-venv, Node, and compile-from-source deferred (compile burns shared
+  CPU; the others need different, riskier machinery).
+- Initial manifests (real pinned hashes): Navidrome 0.63.2 (media server),
+  rclone 1.75.0 (backup CLI), yt-dlp 2026.07.04 (utility). Adding an app is a
+  pure data addition to RAW_MANIFESTS with its upstream-published SHA-256.
+- Tests: +7 (schema/hash integrity, install-before-extract ordering, config
+  templating, per-archetype extraction, reversible uninstall). 76 passing.
 
 ## 0.11.2 update
 

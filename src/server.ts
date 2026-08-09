@@ -20,6 +20,7 @@ import {
 } from "./agent.js";
 import { registerMutationTools } from "./server-mutations.js";
 import {
+  catalogWhatboxApps,
   getWhatboxAccountQuota,
   getWhatboxStorageStatus,
   getWhatboxServiceInventory,
@@ -34,7 +35,7 @@ import {
 } from "./whatbox.js";
 
 export const SERVER_NAME = "whatbox-mcp";
-export const SERVER_VERSION = "0.11.2";
+export const SERVER_VERSION = "0.12.0";
 
 const READ_ONLY_TOOL_ANNOTATIONS = {
   readOnlyHint: true,
@@ -178,6 +179,9 @@ export function getCapabilities() {
       "whatbox_connection_status",
       "whatbox_storage_status",
       "whatbox_account_quota",
+      "whatbox_app_catalog",
+      "whatbox_app_install",
+      "whatbox_app_uninstall",
       "whatbox_list_directory",
       "whatbox_torrent_clients_status",
       "whatbox_structure_map",
@@ -205,20 +209,20 @@ export function getCapabilities() {
       "whatbox_torrent_remove"
     ],
     planned: [
-      "approval-gated atomic static website deployment with validation, health checking, and rollback",
-      "read-only torrent summaries through separately configured supported client APIs",
+      "additional app-install templates and further install archetypes (Python venv, Node)",
       "service-specific health adapters beyond userland Nginx",
-      "approval-gated service lifecycle actions",
+      "monthly traffic-allocation reporting once an on-slot data source is confirmed",
       "multiple locally authorized Whatbox connection profiles",
       "optional authorized provider integration for Manage Apps and managed links"
     ],
     criticalNext: [
-      "fixed SFTP release staging and remote manifest validation",
-      "signed input_required approval handshake and denial-path tests",
-      "atomic activation, bounded health checking, rollback, and redacted audit logging"
+      "per-torrent error and tracker status (surface unregistered torrents) and a reannounce control",
+      "service health adapters so app status is checked, not merely observed",
+      "confirm whether the monthly traffic figure is readable on-slot before modeling the 10 TB cap"
     ],
     safetyModel: [
-      "No generic remote shell tool; every command is a fixed server-authored template",
+      "The only shell tool (whatbox_run_command) is off by default, requires exact-text human approval per command, and enforces a destructive-shape denylist, bounded output, and a timeout; every other command is a fixed server-authored template",
+      "App installs run committed, SHA-256-pinned manifests; the artifact is checksum-verified before extraction, never overwrites an existing install, and is uninstalled by quarantine rather than deletion",
       "Mutations are disabled unless WHATBOX_MUTATIONS_ENABLED=true in local configuration",
       "Every mutation requires an immutable HMAC-signed plan before execution",
       "Destructive mutations always require one-time human approval via MCP elicitation, even in auto-mode; a model-supplied boolean is never sufficient",
@@ -985,6 +989,52 @@ export function createServer() {
             {
               type: "text",
               text: "Unable to read account quota. Check local configuration."
+            }
+          ]
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "whatbox_app_catalog",
+    {
+      title: "List Installable App Templates",
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      description:
+        "List the curated, SHA-256-pinned app install templates and whether each is already installed on the slot. Read-only.",
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        apps: z.array(
+          z.object({
+            id: z.string(),
+            name: z.string(),
+            category: z.string(),
+            summary: z.string(),
+            version: z.string(),
+            installed: z.boolean(),
+            needsPort: z.boolean()
+          })
+        )
+      })
+    },
+    async () => {
+      try {
+        const config = loadConfig();
+        const result = await withWhatboxClient(config, (client) =>
+          catalogWhatboxApps(client, config)
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result
+        };
+      } catch {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "Unable to read the app catalog. Check local configuration."
             }
           ]
         };

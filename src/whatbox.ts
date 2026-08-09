@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { posix } from "node:path";
 import { Client, type ConnectConfig, type SFTPWrapper } from "ssh2";
 import type { WhatboxConfig } from "./config.js";
+import { APP_MANIFESTS } from "./apps.js";
 
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 // A fixed read-only query is fast; this bounds a command that hangs while the
@@ -910,6 +911,31 @@ export function parseQuotaOutput(output: string): AccountQuotaStatus {
 export function parseHomeUsageOutput(output: string): number | null {
   const total = Number.parseInt(output.trim().split(/\s+/)[0] ?? "", 10);
   return Number.isNaN(total) ? null : total;
+}
+
+export async function catalogWhatboxApps(
+  client: Client,
+  config: WhatboxConfig
+) {
+  const home = `/home/${config.username}`;
+  const sftp = await openSftp(client);
+  try {
+    const apps = [];
+    for (const manifest of APP_MANIFESTS) {
+      apps.push({
+        id: manifest.id,
+        name: manifest.name,
+        category: manifest.category,
+        summary: manifest.summary,
+        version: manifest.version,
+        installed: await remotePathExists(sftp, `${home}/${manifest.marker}`),
+        needsPort: manifest.service?.port ?? false
+      });
+    }
+    return { apps };
+  } finally {
+    sftp.end();
+  }
 }
 
 export async function getWhatboxAccountQuota(
