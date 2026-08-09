@@ -263,6 +263,56 @@ export function buildInstallScript(
 }
 
 /**
+ * One read-only command that reports each service app's process state as
+ * "<id> running" / "<id> stopped". Utilities have no service and are omitted.
+ */
+export function buildRunningProbeScript(manifests: AppManifest[]): string {
+  const lines = ["set -u"];
+  for (const manifest of manifests) {
+    if (!manifest.service) {
+      continue;
+    }
+    lines.push(
+      `if pgrep -f ${shellQuote(manifest.service.processMatch)} >/dev/null 2>&1; then echo ${shellQuote(`${manifest.id} running`)}; else echo ${shellQuote(`${manifest.id} stopped`)}; fi`
+    );
+  }
+  return lines.join("\n");
+}
+
+export function parseAppRunningStates(output: string): Map<string, boolean> {
+  const states = new Map<string, boolean>();
+  for (const line of output.split(/\r?\n/)) {
+    const [id, state] = line.trim().split(/\s+/);
+    if (id && (state === "running" || state === "stopped")) {
+      states.set(id, state === "running");
+    }
+  }
+  return states;
+}
+
+/**
+ * Restart a service app: kill the process and relaunch it. The cron keepalive
+ * would also respawn it within the interval; restarting makes that immediate
+ * (e.g. after a config change). The start command references the app's own
+ * config file, so no runtime-only values need re-substituting.
+ */
+export function buildRestartScript(
+  manifest: AppManifest,
+  context: InstallContext
+): string {
+  if (!manifest.service) {
+    throw new Error("This app has no service to restart");
+  }
+  return [
+    "set -u",
+    `pkill -f ${shellQuote(manifest.service.processMatch)} || true`,
+    "sleep 1",
+    substitute(manifest.service.start, context),
+    "echo RESTART_OK"
+  ].join("\n");
+}
+
+/**
  * Assemble the reversible uninstall script: stop the process, strip only this
  * app's cron lines, and move its files into a dated home-level quarantine.
  */

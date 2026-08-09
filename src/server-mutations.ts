@@ -21,6 +21,7 @@ import {
   BACKUP_TARGETS,
   assertShellCommandAllowed,
   installWhatboxApp,
+  restartWhatboxApp,
   uninstallWhatboxApp,
   controlWhatboxService,
   runApprovedShellCommand,
@@ -590,6 +591,51 @@ export function registerMutationTools(server: McpServer) {
         (config) =>
           withWhatboxClient(config, (client) =>
             uninstallWhatboxApp(
+              client,
+              config,
+              getAppManifest(input.appId)!,
+              buildAppInstallContext(config)
+            )
+          )
+      )
+  );
+
+  server.registerTool(
+    "whatbox_app_restart",
+    {
+      title: "Restart a Template-Installed Service App",
+      annotations: MUTATION_ANNOTATIONS,
+      description:
+        "Restart a template-installed service (kill and relaunch; the cron keepalive also respawns it). Only valid for service apps. Requires human approval.",
+      inputSchema: z.object({
+        appId: z.enum(listAppIds() as [string, ...string[]])
+      })
+    },
+    async (input, ctx) =>
+      runGated(
+        ctx as MutationContextLike,
+        (config) => {
+          const manifest = getAppManifest(input.appId);
+          if (!manifest) {
+            throw new Error("Unknown app id");
+          }
+          if (!manifest.service) {
+            throw new Error(
+              `${manifest.name} is not a service; there is nothing to restart`
+            );
+          }
+          return {
+            action: "app_restart" as const,
+            risk: "destructive" as const,
+            summary: `restart ${manifest.name}`,
+            canonicalTargets: [`app_restart:${manifest.id}`],
+            displayTargets: [`${manifest.name} (kill + relaunch)`],
+            requiresApproval: true
+          };
+        },
+        (config) =>
+          withWhatboxClient(config, (client) =>
+            restartWhatboxApp(
               client,
               config,
               getAppManifest(input.appId)!,

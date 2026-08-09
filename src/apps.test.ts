@@ -3,9 +3,12 @@ import test from "node:test";
 import {
   APP_MANIFESTS,
   buildInstallScript,
+  buildRestartScript,
+  buildRunningProbeScript,
   buildUninstallScript,
   getAppManifest,
   listAppIds,
+  parseAppRunningStates,
   shellQuote
 } from "./apps.js";
 
@@ -85,6 +88,38 @@ test("yt-dlp install places the raw binary directly", () => {
   assert.match(script, /install -m 755 artifact '\/home\/example\/bin\/yt-dlp'/);
   assert.doesNotMatch(script, /tar |unzip /);
   assert.doesNotMatch(script, /crontab/);
+});
+
+test("running probe covers service apps and parses back to state", () => {
+  const script = buildRunningProbeScript(APP_MANIFESTS);
+  // Only the service app (Navidrome) is probed; utilities are omitted.
+  assert.match(script, /pgrep -f 'navidrome\/navidrome'/);
+  assert.doesNotMatch(script, /rclone/);
+  assert.doesNotMatch(script, /yt-dlp/);
+
+  const states = parseAppRunningStates(
+    "navidrome running\nsomething stopped\ngarbage-line\n"
+  );
+  assert.equal(states.get("navidrome"), true);
+  assert.equal(states.get("something"), false);
+  assert.equal(states.has("garbage-line"), false);
+});
+
+test("restart kills then relaunches a service; refuses a non-service", () => {
+  const script = buildRestartScript(getAppManifest("navidrome")!, {
+    home: HOME
+  });
+  assert.match(script, /pkill -f 'navidrome\/navidrome'/);
+  assert.ok(
+    script.indexOf("pkill") < script.indexOf("screen -dmS navidrome"),
+    "must kill before relaunching"
+  );
+  assert.match(script, /echo RESTART_OK/);
+
+  assert.throws(
+    () => buildRestartScript(getAppManifest("rclone")!, { home: HOME }),
+    /no service/
+  );
 });
 
 test("uninstall stops, de-crons, and quarantines rather than deleting", () => {

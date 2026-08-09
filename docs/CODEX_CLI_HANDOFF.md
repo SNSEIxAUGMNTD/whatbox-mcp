@@ -4,11 +4,27 @@
 
 - Working directory: the repository root containing this document
 - Package: `whatbox-mcp`
-- Current version: `0.12.0`
+- Current version: `0.13.0`
 - Runtime: Node.js 20 or newer, TypeScript, ESM
 - Transport: local MCP stdio
 - Baseline commit: `f0c95db` on `main`. Inspect `git status` before editing and
   preserve all working-tree changes made after that commit.
+
+## 0.13.0 update
+
+- Lifecycle + health for templated service apps, driven by manifest data
+  (no per-app code):
+  - `whatbox_app_catalog` now reports `running` for service apps (pgrep on
+    the manifest processMatch, one batched command; utilities report null).
+  - `whatbox_app_restart` (destructive, gated): kill + relaunch a service
+    app; refuses non-service apps. The cron keepalive also respawns it.
+  - Pure builders in apps.ts: buildRunningProbeScript, parseAppRunningStates,
+    buildRestartScript. Restart's start command references the app's own
+    config, so no runtime-only values need re-substituting.
+- rclone/yt-dlp (utilities) are driven through whatbox_run_command, not
+  dedicated tools; only the Navidrome-style service needed lifecycle/health.
+- Tests: +2 (running probe + parse; restart ordering + non-service refusal).
+  78 passing.
 
 ## 0.12.0 update
 

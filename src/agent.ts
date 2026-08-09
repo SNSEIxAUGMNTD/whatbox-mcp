@@ -174,6 +174,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: "whatbox_app_catalog", title: "App catalog", category: "apps", mutating: false, risk: "read_only", summary: "Curated SHA-256-pinned app templates and whether each is installed." },
   { name: "whatbox_app_install", title: "Install app template", category: "apps", mutating: true, risk: "destructive", summary: "Download a pinned artifact, verify its checksum, install it. Approval required." },
   { name: "whatbox_app_uninstall", title: "Uninstall app template", category: "apps", mutating: true, risk: "destructive", summary: "Stop, de-cron, and quarantine a template-installed app. Approval required." },
+  { name: "whatbox_app_restart", title: "Restart app service", category: "apps", mutating: true, risk: "destructive", summary: "Kill and relaunch a template-installed service app. Approval required." },
   { name: "whatbox_list_directory", title: "List directory", category: "observe", mutating: false, risk: "read_only", summary: "Bounded entries below an allowed root." },
   { name: "whatbox_structure_map", title: "Structure map", category: "observe", mutating: false, risk: "read_only", summary: "Directory-only map and Mermaid diagram." },
   { name: "whatbox_torrent_clients_status", title: "Torrent client processes", category: "observe", mutating: false, risk: "read_only", summary: "Running state of supported torrent clients." },

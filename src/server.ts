@@ -35,7 +35,7 @@ import {
 } from "./whatbox.js";
 
 export const SERVER_NAME = "whatbox-mcp";
-export const SERVER_VERSION = "0.12.0";
+export const SERVER_VERSION = "0.13.0";
 
 const READ_ONLY_TOOL_ANNOTATIONS = {
   readOnlyHint: true,
@@ -182,6 +182,7 @@ export function getCapabilities() {
       "whatbox_app_catalog",
       "whatbox_app_install",
       "whatbox_app_uninstall",
+      "whatbox_app_restart",
       "whatbox_list_directory",
       "whatbox_torrent_clients_status",
       "whatbox_structure_map",
@@ -1013,6 +1014,7 @@ export function createServer() {
             summary: z.string(),
             version: z.string(),
             installed: z.boolean(),
+            running: z.boolean().nullable(),
             needsPort: z.boolean()
           })
         )

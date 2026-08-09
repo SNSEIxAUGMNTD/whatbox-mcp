@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { posix } from "node:path";
 import { Client, type ConnectConfig, type SFTPWrapper } from "ssh2";
 import type { WhatboxConfig } from "./config.js";
-import { APP_MANIFESTS } from "./apps.js";
+import {
+  APP_MANIFESTS,
+  buildRunningProbeScript,
+  parseAppRunningStates
+} from "./apps.js";
 
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 // A fixed read-only query is fast; this bounds a command that hangs while the
@@ -918,24 +922,42 @@ export async function catalogWhatboxApps(
   config: WhatboxConfig
 ) {
   const home = `/home/${config.username}`;
+  const installed = new Map<string, boolean>();
   const sftp = await openSftp(client);
   try {
-    const apps = [];
     for (const manifest of APP_MANIFESTS) {
-      apps.push({
-        id: manifest.id,
-        name: manifest.name,
-        category: manifest.category,
-        summary: manifest.summary,
-        version: manifest.version,
-        installed: await remotePathExists(sftp, `${home}/${manifest.marker}`),
-        needsPort: manifest.service?.port ?? false
-      });
+      installed.set(
+        manifest.id,
+        await remotePathExists(sftp, `${home}/${manifest.marker}`)
+      );
     }
-    return { apps };
   } finally {
     sftp.end();
   }
+
+  // One command reports process state for every service app; utilities have no
+  // service, so their `running` is null (nothing to run).
+  const serviceManifests = APP_MANIFESTS.filter((manifest) => manifest.service);
+  let running = new Map<string, boolean>();
+  if (serviceManifests.length > 0) {
+    const { output } = await executeFixedCommandWithStatus(
+      client,
+      buildRunningProbeScript(serviceManifests)
+    );
+    running = parseAppRunningStates(output);
+  }
+
+  const apps = APP_MANIFESTS.map((manifest) => ({
+    id: manifest.id,
+    name: manifest.name,
+    category: manifest.category,
+    summary: manifest.summary,
+    version: manifest.version,
+    installed: installed.get(manifest.id) ?? false,
+    running: manifest.service ? (running.get(manifest.id) ?? false) : null,
+    needsPort: manifest.service?.port ?? false
+  }));
+  return { apps };
 }
 
 export async function getWhatboxAccountQuota(

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   buildInstallScript,
+  buildRestartScript,
   buildUninstallScript,
   type AppManifest,
   type InstallContext
@@ -1565,4 +1566,21 @@ export async function uninstallWhatboxApp(
     throw new Error(`The uninstall did not complete cleanly (exit ${code}).`);
   }
   return { removed: true, id: manifest.id };
+}
+
+export async function restartWhatboxApp(
+  client: Client,
+  config: WhatboxConfig,
+  manifest: AppManifest,
+  context: InstallContext
+) {
+  const { code, output } = await executeFixedCommandWithStatus(
+    client,
+    buildRestartScript(manifest, context),
+    APP_INSTALL_TIMEOUT_MS
+  );
+  if (code !== 0 || !output.includes("RESTART_OK")) {
+    throw new Error(`The restart did not complete cleanly (exit ${code}).`);
+  }
+  return { restarted: true, id: manifest.id };
 }

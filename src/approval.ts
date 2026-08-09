@@ -41,7 +41,8 @@ const mutationPlanSchema = z.object({
     "torrent_remove",
     "run_command",
     "app_install",
-    "app_uninstall"
+    "app_uninstall",
+    "app_restart"
   ]),
   slotBinding: z.string().regex(/^[a-f0-9]{64}$/),
   targetDigests: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1).max(100),
