@@ -5,8 +5,11 @@ import { Client, type ConnectConfig, type SFTPWrapper } from "ssh2";
 import type { WhatboxConfig } from "./config.js";
 import {
   APP_MANIFESTS,
-  buildRunningProbeScript,
-  parseAppRunningStates
+  APP_STATE_DIR,
+  buildHealthProbeScript,
+  parseAppState,
+  parseHealthStates,
+  type AppHealthProbe
 } from "./apps.js";
 import { getTorrentBasePaths } from "./torrent.js";
 
@@ -924,6 +927,7 @@ export async function catalogWhatboxApps(
 ) {
   const home = `/home/${config.username}`;
   const installed = new Map<string, boolean>();
+  const state = new Map<string, { version?: string; port?: number }>();
   const sftp = await openSftp(client);
   try {
     for (const manifest of APP_MANIFESTS) {
@@ -931,34 +935,71 @@ export async function catalogWhatboxApps(
         manifest.id,
         await remotePathExists(sftp, `${home}/${manifest.marker}`)
       );
+      const raw = await readRemoteSmallFile(
+        sftp,
+        `${home}/${APP_STATE_DIR}/${manifest.id}.json`
+      );
+      if (raw !== null) {
+        state.set(manifest.id, parseAppState(raw));
+      }
     }
   } finally {
     sftp.end();
   }
 
-  // One command reports process state for every service app; utilities have no
-  // service, so their `running` is null (nothing to run).
-  const serviceManifests = APP_MANIFESTS.filter((manifest) => manifest.service);
-  let running = new Map<string, boolean>();
-  if (serviceManifests.length > 0) {
-    const { output } = await executeFixedCommandWithStatus(
-      client,
-      buildRunningProbeScript(serviceManifests)
-    );
-    running = parseAppRunningStates(output);
-  }
-
-  const apps = APP_MANIFESTS.map((manifest) => ({
+  // One command reports process + loopback health for every service app,
+  // using the port recorded in the state file at install time.
+  const probes: AppHealthProbe[] = APP_MANIFESTS.filter(
+    (manifest) => manifest.service
+  ).map((manifest) => ({
     id: manifest.id,
-    name: manifest.name,
-    category: manifest.category,
-    summary: manifest.summary,
-    version: manifest.version,
-    installed: installed.get(manifest.id) ?? false,
-    running: manifest.service ? (running.get(manifest.id) ?? false) : null,
-    needsPort: manifest.service?.port ?? false
+    processMatch: manifest.service!.processMatch,
+    port: state.get(manifest.id)?.port
   }));
+  const health =
+    probes.length > 0
+      ? parseHealthStates(
+          (await executeFixedCommandWithStatus(client, buildHealthProbeScript(probes)))
+            .output
+        )
+      : new Map();
+
+  const apps = APP_MANIFESTS.map((manifest) => {
+    const installedVersion = state.get(manifest.id)?.version ?? null;
+    const appHealth = health.get(manifest.id);
+    return {
+      id: manifest.id,
+      name: manifest.name,
+      category: manifest.category,
+      summary: manifest.summary,
+      version: manifest.version,
+      installed: installed.get(manifest.id) ?? false,
+      installedVersion,
+      running: manifest.service ? (appHealth?.running ?? false) : null,
+      responding: manifest.service ? (appHealth?.responding ?? null) : null,
+      upgradeAvailable:
+        installedVersion !== null && installedVersion !== manifest.version,
+      needsPort: manifest.service?.port ?? false
+    };
+  });
   return { apps };
+}
+
+function readRemoteSmallFile(
+  sftp: SFTPWrapper,
+  remotePath: string
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    sftp.lstat(remotePath, (statError, stats) => {
+      if (statError || !stats || stats.size > 64 * 1024) {
+        resolve(null);
+        return;
+      }
+      sftp.readFile(remotePath, (readError, data) => {
+        resolve(readError ? null : data.toString("utf8"));
+      });
+    });
+  });
 }
 
 // -- Directory usage breakdown ----------------------------------------------

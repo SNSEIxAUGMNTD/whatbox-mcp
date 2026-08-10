@@ -1,6 +1,6 @@
 {
   "name": "whatbox-mcp",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "A security-first MCP server for operating a Whatbox slot.",
   "type": "module",
   "main": "dist/index.js",

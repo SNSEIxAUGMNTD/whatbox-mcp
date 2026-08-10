@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
+  APP_STATE_DIR,
   buildInstallScript,
   buildRestartScript,
   buildUninstallScript,
+  buildUpgradeScript,
+  parseAppState,
   type AppManifest,
   type InstallContext
 } from "./apps.js";
@@ -1583,4 +1586,49 @@ export async function restartWhatboxApp(
     throw new Error(`The restart did not complete cleanly (exit ${code}).`);
   }
   return { restarted: true, id: manifest.id };
+}
+
+/** Read the port recorded at install so an upgrade preserves it. */
+async function readInstalledAppPort(
+  client: Client,
+  manifest: AppManifest,
+  home: string
+): Promise<number | undefined> {
+  const sftp = await openSftp(client);
+  try {
+    const path = `${home}/${APP_STATE_DIR}/${manifest.id}.json`;
+    const raw = await new Promise<string | null>((resolve) => {
+      sftp.readFile(path, (error, data) =>
+        resolve(error ? null : data.toString("utf8"))
+      );
+    });
+    return raw ? parseAppState(raw).port : undefined;
+  } finally {
+    sftp.end();
+  }
+}
+
+export async function upgradeWhatboxApp(
+  client: Client,
+  config: WhatboxConfig,
+  manifest: AppManifest
+) {
+  const home = `/home/${config.username}`;
+  const port = await readInstalledAppPort(client, manifest, home);
+  const { code, output } = await executeFixedCommandWithStatus(
+    client,
+    buildUpgradeScript(manifest, { home, port }),
+    APP_INSTALL_TIMEOUT_MS
+  );
+  if (output.includes("not-installed")) {
+    throw new Error(`${manifest.name} is not installed`);
+  }
+  if (code !== 0 || !output.includes("UPGRADE_OK")) {
+    throw new Error(
+      output.includes("FAILED")
+        ? "The new artifact failed SHA-256 verification; upgrade aborted."
+        : `The upgrade did not complete cleanly (exit ${code}).`
+    );
+  }
+  return { upgraded: true, id: manifest.id, version: manifest.version };
 }

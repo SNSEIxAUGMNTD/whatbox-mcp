@@ -4,11 +4,30 @@
 
 - Working directory: the repository root containing this document
 - Package: `whatbox-mcp`
-- Current version: `0.14.0`
+- Current version: `0.15.0`
 - Runtime: Node.js 20 or newer, TypeScript, ESM
 - Transport: local MCP stdio
 - Baseline commit: `f0c95db` on `main`. Inspect `git status` before editing and
   preserve all working-tree changes made after that commit.
+
+## 0.15.0 update
+
+- Finishes the two open criticalNext items: app health beyond process-state,
+  and in-place upgrades. Shared foundation: an MCP-owned per-app state file at
+  ~/.config/whatbox-mcp/apps/<id>.json recording {version, port}, written at
+  install/upgrade (APP_STATE_DIR, stateWriteLines, parseAppState).
+- whatbox_app_catalog now reports installedVersion, running (pgrep),
+  responding (reuses the tested loopback curl probe against the state-file
+  port), and upgradeAvailable (installedVersion != manifest.version).
+  buildRunningProbeScript/parseAppRunningStates replaced by
+  buildHealthProbeScript/parseHealthStates.
+- whatbox_app_upgrade (destructive, gated): verify the manifest's pinned
+  artifact, re-extract app files over the install dir (config/data are not in
+  the archive, so preserved), rewrite state, restart. Reads the installed port
+  first so it is preserved. buildUpgradeScript in apps.ts.
+- Capability planned/criticalNext refreshed (both items now shipped).
+- Tests: +3 (health probe+parse, state file+parseAppState, upgrade ordering).
+  83 passing.
 
 ## 0.14.0 update
 

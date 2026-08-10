@@ -6,7 +6,7 @@
 
 [![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-local%20stdio-5C5CFF)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.14.0-12866f)](package.json)
+[![Version](https://img.shields.io/badge/version-0.15.0-12866f)](package.json)
 [![Tests](https://img.shields.io/badge/tests-53%20passing-2ea043)](src)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -18,7 +18,7 @@ process state, directory topology, configuration metadata, website-hosting
 readiness, and bounded userland Nginx diagnostics. It also validates local
 static-site sources and creates signed, short-lived deployment-plan previews.
 
-As of `0.14.0` it can additionally perform **approval-gated mutations** —
+As of `0.15.0` it can additionally perform **approval-gated mutations** —
 upload, download, move, mkdir, quarantine-based delete and second-approval
 purge, configuration backup, service start/stop/restart, atomic website
 deployment with rollback, and torrent add/control/remove over an SSH loopback
@@ -45,7 +45,7 @@ clear and mechanically enforced. This server is designed around four rules:
 
 ## Current release
 
-Version `0.14.0` includes everything from the read-only line —
+Version `0.15.0` includes everything from the read-only line —
 
 - a local MCP stdio server for Node.js 20+;
 - pinned SSH host verification and SSH-agent authentication;
@@ -170,7 +170,7 @@ selection.
 | `whatbox_account_quota` | Inspect Whatbox Account Quota | Reports the account's own disk usage against its plan (`quota`, with a courteous `nice`/`ionice` `du` fallback), separate from the shared array. |
 | `whatbox_directory_usage` | Break Down Disk Usage by Directory | Per-subdirectory byte sizes (largest first) plus the total — what is using the quota. |
 | `whatbox_orphaned_data` | Find Orphaned Data | Top-level entries no loaded torrent references (rTorrent), with sizes — reclaimable quota. |
-| `whatbox_app_catalog` | List Installable App Templates | Lists the curated, SHA-256-pinned app templates, whether each is installed, and (for service apps) whether it is running. |
+| `whatbox_app_catalog` | List Installable App Templates | Lists the curated, SHA-256-pinned app templates with installed/running/responding state, installed vs pinned version, and upgrade availability. |
 | `whatbox_list_directory` | List an Allowed Whatbox Directory | Lists bounded entries below an allowed root; rejects absolute paths and escapes. |
 | `whatbox_structure_map` | Map an Allowed Whatbox Directory | Produces a bounded directory-only map and Mermaid diagram without file-content reads. |
 | `whatbox_torrent_clients_status` | Inspect Supported Torrent Clients | Reports running state for rTorrent, Deluge, Transmission, and qBittorrent only. |
@@ -197,6 +197,7 @@ selection.
 | `whatbox_app_install` | destructive | Installs a curated app from a SHA-256-pinned manifest: verify checksum, never overwrite, register (screen + cron). Approval required; exact script audit-logged. |
 | `whatbox_app_uninstall` | destructive | Stops, de-crons, and quarantines a template-installed app (reversible). Approval required. |
 | `whatbox_app_restart` | destructive | Kills and relaunches a template-installed service app. Approval required. |
+| `whatbox_app_upgrade` | destructive | Verifies and re-extracts the manifest's pinned version, preserving config and data, then restarts. Approval required. |
 | `whatbox_torrent_add` | reversible | Adds a magnet/HTTP(S) torrent. |
 | `whatbox_torrent_control` | reversible | Pauses/resumes/reannounces/labels/ratio-limits one torrent. |
 | `whatbox_quarantine_path` | destructive | Soft-deletes a path into dated quarantine (approval). |

@@ -42,7 +42,8 @@ const mutationPlanSchema = z.object({
     "run_command",
     "app_install",
     "app_uninstall",
-    "app_restart"
+    "app_restart",
+    "app_upgrade"
   ]),
   slotBinding: z.string().regex(/^[a-f0-9]{64}$/),
   targetDigests: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1).max(100),

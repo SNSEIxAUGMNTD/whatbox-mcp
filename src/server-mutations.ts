@@ -14,6 +14,7 @@ import {
   getAppManifest,
   listAppIds,
   buildInstallScript,
+  buildUpgradeScript,
   type InstallContext
 } from "./apps.js";
 import {
@@ -23,6 +24,7 @@ import {
   installWhatboxApp,
   restartWhatboxApp,
   uninstallWhatboxApp,
+  upgradeWhatboxApp,
   controlWhatboxService,
   runApprovedShellCommand,
   SHELL_MAX_TIMEOUT_SECONDS,
@@ -596,6 +598,45 @@ export function registerMutationTools(server: McpServer) {
               getAppManifest(input.appId)!,
               buildAppInstallContext(config)
             )
+          )
+      )
+  );
+
+  server.registerTool(
+    "whatbox_app_upgrade",
+    {
+      title: "Upgrade a Template-Installed App",
+      annotations: MUTATION_ANNOTATIONS,
+      description:
+        "Upgrade an installed app to the manifest's pinned version: verify the new artifact's SHA-256, re-extract app files over the install (preserving config and data), and restart. Requires human approval; the exact upgrade script is audit-logged.",
+      inputSchema: z.object({
+        appId: z.enum(listAppIds() as [string, ...string[]])
+      })
+    },
+    async (input, ctx) =>
+      runGated(
+        ctx as MutationContextLike,
+        (config) => {
+          const manifest = getAppManifest(input.appId);
+          if (!manifest) {
+            throw new Error("Unknown app id");
+          }
+          const artifact = manifest.fetch.artifact;
+          return {
+            action: "app_upgrade" as const,
+            risk: "destructive" as const,
+            summary: `upgrade ${manifest.name} to ${manifest.version}`,
+            canonicalTargets: [`app_upgrade:${manifest.id}@${manifest.version}`],
+            displayTargets: [
+              `${manifest.name} → ${manifest.version} (sha256 ${artifact.sha256.slice(0, 12)}…, config + data preserved)`
+            ],
+            auditDetail: buildUpgradeScript(manifest, buildAppInstallContext(config)),
+            requiresApproval: true
+          };
+        },
+        (config) =>
+          withWhatboxClient(config, (client) =>
+            upgradeWhatboxApp(client, config, getAppManifest(input.appId)!)
           )
       )
   );

@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   APP_MANIFESTS,
+  buildHealthProbeScript,
   buildInstallScript,
   buildRestartScript,
-  buildRunningProbeScript,
   buildUninstallScript,
+  buildUpgradeScript,
   getAppManifest,
   listAppIds,
-  parseAppRunningStates,
+  parseAppState,
+  parseHealthStates,
   shellQuote
 } from "./apps.js";
 
@@ -96,19 +98,56 @@ test("yt-dlp install places the raw binary directly", () => {
   assert.doesNotMatch(script, /crontab/);
 });
 
-test("running probe covers service apps and parses back to state", () => {
-  const script = buildRunningProbeScript(APP_MANIFESTS);
-  // Only the service app (Navidrome) is probed; utilities are omitted.
+test("health probe checks process and (when a port is known) loopback response", () => {
+  const script = buildHealthProbeScript([
+    { id: "navidrome", processMatch: "navidrome/navidrome", port: 21847 },
+    { id: "beets", processMatch: "beets/beet" } // no port
+  ]);
   assert.match(script, /pgrep -f 'navidrome\/navidrome'/);
-  assert.doesNotMatch(script, /rclone/);
-  assert.doesNotMatch(script, /yt-dlp/);
+  assert.match(script, /curl .* 'http:\/\/127\.0\.0\.1:21847\/'/);
+  assert.match(script, /H=na/); // the port-less entry
 
-  const states = parseAppRunningStates(
-    "navidrome running\nsomething stopped\ngarbage-line\n"
+  const states = parseHealthStates(
+    ["navidrome|running|responding", "x|stopped|unreachable", "y|running|na", "junk"].join(
+      "\n"
+    )
   );
-  assert.equal(states.get("navidrome"), true);
-  assert.equal(states.get("something"), false);
-  assert.equal(states.has("garbage-line"), false);
+  assert.deepEqual(states.get("navidrome"), { running: true, responding: true });
+  assert.deepEqual(states.get("x"), { running: false, responding: false });
+  assert.deepEqual(states.get("y"), { running: true, responding: null });
+  assert.equal(states.has("junk"), false);
+});
+
+test("install records a state file with version and port; parseAppState reads it", () => {
+  const script = buildInstallScript(getAppManifest("navidrome")!, {
+    home: HOME,
+    port: 21847
+  });
+  assert.match(script, /\.config\/whatbox-mcp\/apps/);
+  // The last base64 blob is the state file; decode and check it.
+  const blobs = [...script.matchAll(/printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d/g)];
+  const stateJson = Buffer.from(blobs.at(-1)![1], "base64").toString("utf8");
+  const state = parseAppState(stateJson);
+  assert.equal(state.version, "0.63.2");
+  assert.equal(state.port, 21847);
+
+  assert.deepEqual(parseAppState("not json"), {});
+  assert.deepEqual(parseAppState('{"version":"1.0"}'), { version: "1.0", port: undefined });
+});
+
+test("upgrade requires an existing install, verifies, and preserves data", () => {
+  const script = buildUpgradeScript(getAppManifest("navidrome")!, {
+    home: HOME,
+    port: 21847
+  });
+  assert.match(script, /not-installed/);
+  assert.ok(
+    script.indexOf("sha256sum -c -") < script.indexOf("tar xzf"),
+    "verify before re-extracting"
+  );
+  // Re-extracts over the install dir (data/config not in the archive → kept).
+  assert.match(script, /tar xzf artifact -C '\/home\/example\/navidrome'/);
+  assert.match(script, /echo UPGRADE_OK/);
 });
 
 test("restart kills then relaunches a service; refuses a non-service", () => {

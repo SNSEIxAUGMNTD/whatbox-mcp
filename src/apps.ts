@@ -262,6 +262,44 @@ function substitute(template: string, context: InstallContext): string {
 
 const CRON_MARKER = (id: string) => `# whatbox-mcp:${id}`;
 
+// MCP-owned per-app state (home-relative): records the installed version and
+// chosen port so the catalog can report installed version, upgrade
+// availability, and health without parsing each app's own config format.
+export const APP_STATE_DIR = ".config/whatbox-mcp/apps";
+
+export interface AppState {
+  version?: string;
+  port?: number;
+}
+
+export function parseAppState(json: string): AppState {
+  try {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    return {
+      version: typeof parsed.version === "string" ? parsed.version : undefined,
+      port: Number.isInteger(parsed.port) ? (parsed.port as number) : undefined
+    };
+  } catch {
+    return {};
+  }
+}
+
+function stateWriteLines(manifest: AppManifest, context: InstallContext): string[] {
+  const state: AppState = { version: manifest.version };
+  if (manifest.service?.port && context.port) {
+    state.port = context.port;
+  }
+  const encoded = Buffer.from(
+    JSON.stringify({ id: manifest.id, ...state }),
+    "utf8"
+  ).toString("base64");
+  const dir = `${context.home}/${APP_STATE_DIR}`;
+  return [
+    `mkdir -p ${shellQuote(dir)}`,
+    `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(`${dir}/${manifest.id}.json`)}`
+  ];
+}
+
 /**
  * Assemble the server-authored install script for a manifest. The script
  * fails closed: `set -eu` plus an up-front marker check and a `sha256sum -c`
@@ -343,34 +381,65 @@ export function buildInstallScript(
     lines.push(start);
   }
 
+  lines.push(...stateWriteLines(manifest, context));
   lines.push("echo INSTALL_OK");
   return lines.join("\n");
 }
 
+export interface AppHealthProbe {
+  id: string;
+  processMatch: string;
+  port?: number;
+}
+
+export interface AppHealth {
+  running: boolean;
+  // true = a loopback HTTP request got a response; false = refused/unreachable;
+  // null = no port to probe, or curl unavailable.
+  responding: boolean | null;
+}
+
 /**
- * One read-only command that reports each service app's process state as
- * "<id> running" / "<id> stopped". Utilities have no service and are omitted.
+ * One read-only command that reports each service app's health as
+ * "<id>|<running|stopped>|<responding|unreachable|unknown|na>". Process state
+ * is pgrep; responding reuses the same loopback curl probe as website
+ * diagnostics (any HTTP response — including 4xx/5xx — means it is serving).
  */
-export function buildRunningProbeScript(manifests: AppManifest[]): string {
+export function buildHealthProbeScript(entries: AppHealthProbe[]): string {
   const lines = ["set -u"];
-  for (const manifest of manifests) {
-    if (!manifest.service) {
-      continue;
-    }
+  for (const entry of entries) {
     lines.push(
-      `if pgrep -f ${shellQuote(manifest.service.processMatch)} >/dev/null 2>&1; then echo ${shellQuote(`${manifest.id} running`)}; else echo ${shellQuote(`${manifest.id} stopped`)}; fi`
+      `if pgrep -f ${shellQuote(entry.processMatch)} >/dev/null 2>&1; then R=running; else R=stopped; fi`
     );
+    if (entry.port && Number.isInteger(entry.port)) {
+      const url = `http://127.0.0.1:${entry.port}/`;
+      lines.push(
+        `if [ ! -x /usr/bin/curl ]; then H=unknown; elif /usr/bin/curl -s -o /dev/null --max-time 5 ${shellQuote(url)} 2>/dev/null; then H=responding; else H=unreachable; fi`
+      );
+    } else {
+      lines.push("H=na");
+    }
+    lines.push(`echo ${shellQuote(`${entry.id}|`)}"$R|$H"`);
   }
   return lines.join("\n");
 }
 
-export function parseAppRunningStates(output: string): Map<string, boolean> {
-  const states = new Map<string, boolean>();
+export function parseHealthStates(output: string): Map<string, AppHealth> {
+  const states = new Map<string, AppHealth>();
   for (const line of output.split(/\r?\n/)) {
-    const [id, state] = line.trim().split(/\s+/);
-    if (id && (state === "running" || state === "stopped")) {
-      states.set(id, state === "running");
+    const [id, running, responding] = line.trim().split("|");
+    if (!id || (running !== "running" && running !== "stopped")) {
+      continue;
     }
+    states.set(id, {
+      running: running === "running",
+      responding:
+        responding === "responding"
+          ? true
+          : responding === "unreachable"
+            ? false
+            : null
+    });
   }
   return states;
 }
@@ -395,6 +464,83 @@ export function buildRestartScript(
     substitute(manifest.service.start, context),
     "echo RESTART_OK"
   ].join("\n");
+}
+
+/**
+ * Upgrade in place to the manifest's pinned version. Requires an existing
+ * install, verifies the new artifact's SHA-256 before replacing anything, and
+ * re-extracts only the app files over the install directory — the data/config
+ * (navidrome.toml, the *arr data dir, etc.) live alongside but are not in the
+ * archive, so they are preserved. Rewrites the state file and restarts.
+ */
+export function buildUpgradeScript(
+  manifest: AppManifest,
+  context: InstallContext
+): string {
+  const home = context.home;
+  const marker = `${home}/${manifest.marker}`;
+  const { url, sha256 } = manifest.fetch.artifact;
+
+  const lines = [
+    "set -eu",
+    `MARKER=${shellQuote(marker)}`,
+    'if [ ! -e "$MARKER" ]; then echo "not-installed"; exit 3; fi'
+  ];
+
+  if (manifest.service) {
+    lines.push(`pkill -f ${shellQuote(manifest.service.processMatch)} || true`);
+    lines.push("sleep 1");
+  }
+
+  lines.push(
+    'TMP="$(mktemp -d)"',
+    "trap 'rm -rf \"$TMP\"' EXIT",
+    'cd "$TMP"',
+    `wget -q -O artifact ${shellQuote(url)}`,
+    `echo ${shellQuote(`${sha256}  artifact`)} | sha256sum -c -`
+  );
+
+  const installDir = manifest.installDir
+    ? `${home}/${manifest.installDir}`
+    : undefined;
+  if (installDir) {
+    // Re-extract app files over the existing dir; data/config are not in the
+    // archive and remain untouched.
+    if (manifest.fetch.kind === "tar.gz") {
+      lines.push(`tar xzf artifact -C ${shellQuote(installDir)}`);
+    } else if (manifest.fetch.kind === "tar.xz") {
+      lines.push(`tar xJf artifact -C ${shellQuote(installDir)}`);
+    } else if (manifest.fetch.kind === "zip") {
+      lines.push(`unzip -oq artifact -d ${shellQuote(installDir)}`);
+    }
+  }
+
+  if (manifest.binary) {
+    lines.push('mkdir -p "$TMP/x"');
+    if (manifest.fetch.kind === "zip") {
+      lines.push('unzip -oq artifact -d "$TMP/x"');
+    } else if (manifest.fetch.kind === "tar.gz") {
+      lines.push('tar xzf artifact -C "$TMP/x"');
+    } else if (manifest.fetch.kind === "tar.xz") {
+      lines.push('tar xJf artifact -C "$TMP/x"');
+    }
+    const source =
+      manifest.fetch.kind === "raw"
+        ? "artifact"
+        : `"$TMP/x"/${substitute(manifest.binary.archivePath ?? "", context)}`;
+    lines.push(
+      `install -m 755 ${source} ${shellQuote(`${home}/${manifest.binary.target}`)}`
+    );
+  }
+
+  lines.push(...stateWriteLines(manifest, context));
+
+  if (manifest.service) {
+    lines.push(substitute(manifest.service.start, context));
+  }
+
+  lines.push("echo UPGRADE_OK");
+  return lines.join("\n");
 }
 
 /**

@@ -37,7 +37,7 @@ import {
 } from "./whatbox.js";
 
 export const SERVER_NAME = "whatbox-mcp";
-export const SERVER_VERSION = "0.14.0";
+export const SERVER_VERSION = "0.15.0";
 
 const READ_ONLY_TOOL_ANNOTATIONS = {
   readOnlyHint: true,
@@ -187,6 +187,7 @@ export function getCapabilities() {
       "whatbox_app_install",
       "whatbox_app_uninstall",
       "whatbox_app_restart",
+      "whatbox_app_upgrade",
       "whatbox_list_directory",
       "whatbox_torrent_clients_status",
       "whatbox_structure_map",
@@ -214,15 +215,12 @@ export function getCapabilities() {
       "whatbox_torrent_remove"
     ],
     planned: [
-      "additional app-install templates and further install archetypes (Python venv, Node)",
-      "runtime-port tracking so app and service health can probe HTTP, not just process state",
-      "in-place app upgrades that preserve config and data",
+      "more app templates (e.g. ffmpeg) and the Python-venv / Node install archetypes",
       "multiple locally authorized Whatbox connection profiles",
       "optional authorized provider integration for Manage Apps and managed links"
     ],
     criticalNext: [
-      "HTTP-level health for services and apps (needs per-install port tracking)",
-      "app upgrade path (installs currently pin one version with no in-place upgrade)",
+      "bulk-transfer stall detection for uploads/downloads (currently size-bounded plus keepalive only)",
       "monthly traffic is web-panel / Skynet-IRC only — no on-slot source found, so it is intentionally not exposed here"
     ],
     safetyModel: [
@@ -1120,7 +1118,10 @@ export function createServer() {
             summary: z.string(),
             version: z.string(),
             installed: z.boolean(),
+            installedVersion: z.string().nullable(),
             running: z.boolean().nullable(),
+            responding: z.boolean().nullable(),
+            upgradeAvailable: z.boolean(),
             needsPort: z.boolean()
           })
         )
