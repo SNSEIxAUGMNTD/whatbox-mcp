@@ -21,7 +21,7 @@ const artifactSchema = z.object({
 const appManifestSchema = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
   name: z.string().min(1),
-  category: z.enum(["media-server", "backup", "utility"]),
+  category: z.enum(["media-server", "backup", "utility", "automation"]),
   summary: z.string().min(1),
   version: z.string().min(1),
   fetch: z.object({
@@ -43,7 +43,9 @@ const appManifestSchema = z.object({
     .optional(),
   config: z
     .object({
-      path: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,64}$/),
+      // May include one subdirectory (e.g. data/config.xml); committed data,
+      // so no traversal guard beyond the character class is needed.
+      path: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,128}$/),
       content: z.string()
     })
     .optional(),
@@ -143,6 +145,86 @@ const RAW_MANIFESTS: AppManifest[] = [
     binary: { target: "bin/yt-dlp" },
     manualStep: "Ensure ~/bin is on your PATH, then run `yt-dlp <url>` over SSH.",
     notes: "Pairs with ffmpeg for merging/transcoding."
+  },
+  {
+    id: "sonarr",
+    name: "Sonarr",
+    category: "automation",
+    summary: "TV series library manager and PVR for Usenet/torrents.",
+    version: "4.0.19.2979",
+    fetch: {
+      kind: "tar.gz",
+      artifact: {
+        url: "https://github.com/Sonarr/Sonarr/releases/download/v4.0.19.2979/Sonarr.main.4.0.19.2979.linux-x64.tar.gz",
+        sha256:
+          "b691b3584c31c0b5514058dee81071c923f63d59a37d19e32f92fa13eaa153db"
+      }
+    },
+    marker: "sonarr",
+    installDir: "sonarr",
+    config: {
+      path: "data/config.xml",
+      content: [
+        "<Config>",
+        "  <Port>{{PORT}}</Port>",
+        "  <BindAddress>127.0.0.1</BindAddress>",
+        "  <UrlBase></UrlBase>",
+        "  <LaunchBrowser>False</LaunchBrowser>",
+        "  <AnalyticsEnabled>False</AnalyticsEnabled>",
+        "</Config>",
+        ""
+      ].join("\n")
+    },
+    service: {
+      start:
+        "screen -dmS sonarr {{HOME}}/sonarr/Sonarr/Sonarr -nobrowser -data={{HOME}}/sonarr/data",
+      processMatch: "sonarr/Sonarr/Sonarr",
+      cron: true,
+      port: true
+    },
+    manualStep:
+      "Add port {{PORT}} as a custom app on the Manage Links page, then finish setup (indexers, auth) in Sonarr's web UI.",
+    notes: "Self-contained .NET build; no external runtime. Data + DB live in ~/sonarr/data."
+  },
+  {
+    id: "radarr",
+    name: "Radarr",
+    category: "automation",
+    summary: "Movie library manager and PVR for Usenet/torrents.",
+    version: "6.3.0.10514",
+    fetch: {
+      kind: "tar.gz",
+      artifact: {
+        url: "https://github.com/Radarr/Radarr/releases/download/v6.3.0.10514/Radarr.master.6.3.0.10514.linux-core-x64.tar.gz",
+        sha256:
+          "41d6455c037ff267c5ad5a0f0de4502cebe8f89ec3d051da97851933d48a4047"
+      }
+    },
+    marker: "radarr",
+    installDir: "radarr",
+    config: {
+      path: "data/config.xml",
+      content: [
+        "<Config>",
+        "  <Port>{{PORT}}</Port>",
+        "  <BindAddress>127.0.0.1</BindAddress>",
+        "  <UrlBase></UrlBase>",
+        "  <LaunchBrowser>False</LaunchBrowser>",
+        "  <AnalyticsEnabled>False</AnalyticsEnabled>",
+        "</Config>",
+        ""
+      ].join("\n")
+    },
+    service: {
+      start:
+        "screen -dmS radarr {{HOME}}/radarr/Radarr/Radarr -nobrowser -data={{HOME}}/radarr/data",
+      processMatch: "radarr/Radarr/Radarr",
+      cron: true,
+      port: true
+    },
+    manualStep:
+      "Add port {{PORT}} as a custom app on the Manage Links page, then finish setup (indexers, auth) in Radarr's web UI.",
+    notes: "Self-contained .NET build; no external runtime. Data + DB live in ~/radarr/data."
   }
 ];
 
@@ -238,10 +320,13 @@ export function buildInstallScript(
   }
 
   if (manifest.config && installDir) {
+    const target = `${installDir}/${manifest.config.path}`;
+    const parent = target.slice(0, target.lastIndexOf("/"));
+    lines.push(`mkdir -p ${shellQuote(parent)}`);
     const content = substitute(manifest.config.content, context);
     const encoded = Buffer.from(content, "utf8").toString("base64");
     lines.push(
-      `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(`${installDir}/${manifest.config.path}`)}`
+      `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(target)}`
     );
   }
 

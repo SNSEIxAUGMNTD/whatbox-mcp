@@ -809,13 +809,19 @@ export function registerMutationTools(server: McpServer) {
   server.registerTool(
     "whatbox_torrent_control",
     {
-      title: "Pause, Resume, or Label a Torrent",
+      title: "Pause, Resume, Reannounce, or Label a Torrent",
       annotations: MUTATION_ANNOTATIONS,
       description:
-        "Pause, resume, set the label/category, or set the seed-ratio limit of one torrent. Reversible.",
+        "Pause, resume, reannounce to trackers, set the label/category, or set the seed-ratio limit of one torrent. Reversible.",
       inputSchema: z.object({
         torrentId: z.string().min(1).max(64),
-        operation: z.enum(["pause", "resume", "set_label", "set_ratio_limit"]),
+        operation: z.enum([
+          "pause",
+          "resume",
+          "reannounce",
+          "set_label",
+          "set_ratio_limit"
+        ]),
         label: z.string().max(200).optional(),
         ratioLimit: z.number().min(0).max(1000).optional()
       })

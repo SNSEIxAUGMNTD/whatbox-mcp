@@ -21,7 +21,9 @@ import {
 import { registerMutationTools } from "./server-mutations.js";
 import {
   catalogWhatboxApps,
+  findWhatboxOrphanedData,
   getWhatboxAccountQuota,
+  getWhatboxDirectoryUsage,
   getWhatboxStorageStatus,
   getWhatboxServiceInventory,
   getWhatboxTorrentClientStatus,
@@ -35,7 +37,7 @@ import {
 } from "./whatbox.js";
 
 export const SERVER_NAME = "whatbox-mcp";
-export const SERVER_VERSION = "0.13.0";
+export const SERVER_VERSION = "0.14.0";
 
 const READ_ONLY_TOOL_ANNOTATIONS = {
   readOnlyHint: true,
@@ -179,6 +181,8 @@ export function getCapabilities() {
       "whatbox_connection_status",
       "whatbox_storage_status",
       "whatbox_account_quota",
+      "whatbox_directory_usage",
+      "whatbox_orphaned_data",
       "whatbox_app_catalog",
       "whatbox_app_install",
       "whatbox_app_uninstall",
@@ -211,15 +215,15 @@ export function getCapabilities() {
     ],
     planned: [
       "additional app-install templates and further install archetypes (Python venv, Node)",
-      "service-specific health adapters beyond userland Nginx",
-      "monthly traffic-allocation reporting once an on-slot data source is confirmed",
+      "runtime-port tracking so app and service health can probe HTTP, not just process state",
+      "in-place app upgrades that preserve config and data",
       "multiple locally authorized Whatbox connection profiles",
       "optional authorized provider integration for Manage Apps and managed links"
     ],
     criticalNext: [
-      "per-torrent error and tracker status (surface unregistered torrents) and a reannounce control",
-      "service health adapters so app status is checked, not merely observed",
-      "confirm whether the monthly traffic figure is readable on-slot before modeling the 10 TB cap"
+      "HTTP-level health for services and apps (needs per-install port tracking)",
+      "app upgrade path (installs currently pin one version with no in-place upgrade)",
+      "monthly traffic is web-panel / Skynet-IRC only — no on-slot source found, so it is intentionally not exposed here"
     ],
     safetyModel: [
       "The only shell tool (whatbox_run_command) is off by default, requires exact-text human approval per command, and enforces a destructive-shape denylist, bounded output, and a timeout; every other command is a fixed server-authored template",
@@ -865,7 +869,9 @@ export function createServer() {
       description:
         "Create a bounded directory-only map and Mermaid diagram below an allowed root without reading file contents or traversing sensitive directories or symlinks.",
       inputSchema: z.object({
-        rootIndex: z.number().int().min(0).default(0),
+        // Named observeRootIndex (not rootIndex) so it cannot be conflated
+        // with the mutation tools' rootIndex, which indexes a different root set.
+        observeRootIndex: z.number().int().min(0).default(0),
         maxDepth: z.number().int().min(0).max(5).default(2),
         maxNodes: z.number().int().min(1).max(1000).default(200)
       }),
@@ -886,14 +892,14 @@ export function createServer() {
         mermaid: z.string()
       })
     },
-    async ({ rootIndex, maxDepth, maxNodes }) => {
+    async ({ observeRootIndex, maxDepth, maxNodes }) => {
       try {
         const config = loadConfig();
         const result = await withWhatboxClient(config, (client) =>
           mapWhatboxDirectory(
             client,
             config,
-            rootIndex,
+            observeRootIndex,
             maxDepth,
             maxNodes
           )
@@ -998,6 +1004,106 @@ export function createServer() {
   );
 
   server.registerTool(
+    "whatbox_directory_usage",
+    {
+      title: "Break Down Disk Usage by Directory",
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      description:
+        "Report the byte size of each immediate subdirectory below an observe path (largest first) plus the total, using a courteous idle-priority du. Answers 'what is using my quota'. Read-only.",
+      inputSchema: z.object({
+        observeRootIndex: z.number().int().min(0).default(0),
+        relativePath: z.string().max(1024).default(".")
+      }),
+      outputSchema: z.object({
+        relativePath: z.string(),
+        totalBytes: z.number().nonnegative(),
+        entries: z.array(
+          z.object({ name: z.string(), sizeBytes: z.number().nonnegative() })
+        )
+      })
+    },
+    async ({ observeRootIndex, relativePath }) => {
+      try {
+        const config = loadConfig();
+        const result = await withWhatboxClient(config, (client) =>
+          getWhatboxDirectoryUsage(
+            client,
+            config,
+            observeRootIndex,
+            relativePath
+          )
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result
+        };
+      } catch {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "Unable to measure directory usage. Check the observe root and path."
+            }
+          ]
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "whatbox_orphaned_data",
+    {
+      title: "Find Orphaned Data (Not Referenced by Any Torrent)",
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
+      description:
+        "List top-level entries below an observe path that no loaded torrent references — wasted quota. Cross-references rTorrent data paths against on-disk contents. Requires rTorrent. Read-only.",
+      inputSchema: z.object({
+        observeRootIndex: z.number().int().min(0).default(0),
+        relativePath: z.string().max(1024).default(".")
+      }),
+      outputSchema: z.object({
+        relativePath: z.string(),
+        torrentCount: z.number().int().nonnegative(),
+        orphanCount: z.number().int().nonnegative(),
+        orphans: z.array(
+          z.object({ name: z.string(), sizeBytes: z.number().nonnegative() })
+        )
+      })
+    },
+    async ({ observeRootIndex, relativePath }) => {
+      try {
+        const config = loadConfig();
+        const result = await withWhatboxClient(config, (client) =>
+          findWhatboxOrphanedData(
+            client,
+            config,
+            observeRootIndex,
+            relativePath
+          )
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          structuredContent: result
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                error instanceof Error
+                  ? error.message
+                  : "Unable to scan for orphaned data."
+            }
+          ]
+        };
+      }
+    }
+  );
+
+  server.registerTool(
     "whatbox_app_catalog",
     {
       title: "List Installable App Templates",
@@ -1085,9 +1191,11 @@ export function createServer() {
       title: "List an Allowed Whatbox Directory",
       annotations: READ_ONLY_TOOL_ANNOTATIONS,
       description:
-        "List a directory below an explicitly allowed Whatbox storage root. Absolute paths and path escapes are rejected.",
+        "List a directory below an observe root (defaults to the whole slot home). Absolute paths and path escapes are rejected. Read-only observation is a wider scope than the mutation tools' allowed roots — hence observeRootIndex, not rootIndex.",
       inputSchema: z.object({
-        rootIndex: z.number().int().min(0).default(0),
+        // Distinct from the mutation tools' rootIndex: this indexes the
+        // observe roots, which cover more than the writable allowed roots.
+        observeRootIndex: z.number().int().min(0).default(0),
         relativePath: z.string().max(1024).default("."),
         limit: z.number().int().min(1).max(500).default(100)
       }),
@@ -1103,14 +1211,14 @@ export function createServer() {
         truncated: z.boolean()
       })
     },
-    async ({ rootIndex, relativePath, limit }) => {
+    async ({ observeRootIndex, relativePath, limit }) => {
       try {
         const config = loadConfig();
         const result = await withWhatboxClient(config, (client) =>
           listWhatboxDirectory(
             client,
             config,
-            rootIndex,
+            observeRootIndex,
             relativePath,
             limit
           )

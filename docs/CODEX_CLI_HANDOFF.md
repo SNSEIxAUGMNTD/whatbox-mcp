@@ -4,11 +4,36 @@
 
 - Working directory: the repository root containing this document
 - Package: `whatbox-mcp`
-- Current version: `0.13.0`
+- Current version: `0.14.0`
 - Runtime: Node.js 20 or newer, TypeScript, ESM
 - Transport: local MCP stdio
 - Baseline commit: `f0c95db` on `main`. Inspect `git status` before editing and
   preserve all working-tree changes made after that commit.
+
+## 0.14.0 update
+
+- Torrent health: `d.message` added to the rTorrent multicall and a `message`
+  field to TorrentSummary (all clients) — surfaces "unregistered torrent" /
+  tracker errors. New `reannounce` op on whatbox_torrent_control (rTorrent
+  d.tracker_announce; transmission torrent-reannounce; qbit reannounce).
+- whatbox_orphaned_data (read-only): cross-references rTorrent d.base_path
+  (getTorrentBasePaths) against top-level on-disk entries to find data no
+  torrent references; sizes the orphans with one bounded du. rTorrent only.
+- whatbox_directory_usage (read-only): du -d1 breakdown per subdirectory,
+  largest first (parseDuDepth1). Answers "what is using my quota".
+- M1 fixed: observe tools' input renamed rootIndex -> observeRootIndex
+  (list_directory, structure_map, + the two new tools) so it can't be
+  conflated with the mutation tools' rootIndex (different root set).
+- App templates: Sonarr 4.0.19.2979 + Radarr 6.3.0.10514 (self-hashed, no
+  upstream checksums published; both reconfirmed by re-download). Manifest
+  config now supports a subdir (data/config.xml) — buildInstallScript mkdir's
+  the parent. New "automation" category.
+- Traffic quota: investigated and NOT built — the wiki confirms monthly
+  traffic is web-panel / Skynet-IRC only, with no on-slot source. Recorded
+  as a finding rather than shipping a tool that reads nothing.
+- Test-quality: made the tamper test deterministic (was flaky — flipping the
+  final base64url char could decode identically).
+- Tests: 81 passing.
 
 ## 0.13.0 update
 

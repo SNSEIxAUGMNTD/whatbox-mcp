@@ -21,7 +21,13 @@ test("every manifest carries a real 64-hex SHA-256 and a valid id", () => {
     assert.match(manifest.id, /^[a-z0-9][a-z0-9-]*$/);
     assert.match(manifest.fetch.artifact.url, /^https:\/\//);
   }
-  assert.deepEqual(listAppIds().sort(), ["navidrome", "rclone", "yt-dlp"]);
+  assert.deepEqual(listAppIds().sort(), [
+    "navidrome",
+    "radarr",
+    "rclone",
+    "sonarr",
+    "yt-dlp"
+  ]);
 });
 
 test("shellQuote neutralizes embedded single quotes", () => {
@@ -120,6 +126,21 @@ test("restart kills then relaunches a service; refuses a non-service", () => {
     () => buildRestartScript(getAppManifest("rclone")!, { home: HOME }),
     /no service/
   );
+});
+
+test("Sonarr install creates the config subdirectory and templates the port", () => {
+  const script = buildInstallScript(getAppManifest("sonarr")!, {
+    home: HOME,
+    port: 28989
+  });
+  assert.ok(script.includes(getAppManifest("sonarr")!.fetch.artifact.sha256));
+  // The data/ subdir must be created before the config is written into it.
+  assert.match(script, /mkdir -p '\/home\/example\/sonarr\/data'/);
+  const encoded = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d/.exec(script)!;
+  const config = Buffer.from(encoded[1], "base64").toString("utf8");
+  assert.match(config, /<Port>28989<\/Port>/);
+  assert.match(config, /<BindAddress>127\.0\.0\.1<\/BindAddress>/);
+  assert.match(script, /screen -dmS sonarr .*Sonarr\/Sonarr -nobrowser/);
 });
 
 test("uninstall stops, de-crons, and quarantines rather than deleting", () => {

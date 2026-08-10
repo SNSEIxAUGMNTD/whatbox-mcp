@@ -131,7 +131,12 @@ test("a tampered sealed plan is denied", () => {
   const first = gateMutation(baseConfig(), ctx(), destructive, stateDirectory);
   const sealed =
     first.state === "input_required" ? first.result.requestState! : "";
-  const tampered = `${sealed.slice(0, -1)}${sealed.endsWith("A") ? "B" : "A"}`;
+  // Corrupt a byte inside the signed payload (v1.<payload>.<sig>). Flipping the
+  // final base64url char was flaky: unused trailing bits can decode identically.
+  const [prefix, payload, signature] = sealed.split(".");
+  const mid = Math.floor(payload.length / 2);
+  const swapped = payload[mid] === "A" ? "B" : "A";
+  const tampered = `${prefix}.${payload.slice(0, mid)}${swapped}${payload.slice(mid + 1)}.${signature}`;
 
   const outcome = gateMutation(
     baseConfig(),

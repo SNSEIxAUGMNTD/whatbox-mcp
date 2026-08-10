@@ -8,6 +8,7 @@ import {
   buildRunningProbeScript,
   parseAppRunningStates
 } from "./apps.js";
+import { getTorrentBasePaths } from "./torrent.js";
 
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 // A fixed read-only query is fast; this bounds a command that hangs while the
@@ -958,6 +959,178 @@ export async function catalogWhatboxApps(
     needsPort: manifest.service?.port ?? false
   }));
   return { apps };
+}
+
+// -- Directory usage breakdown ----------------------------------------------
+
+export interface DirectoryUsageEntry {
+  name: string;
+  sizeBytes: number;
+}
+
+/**
+ * Parse `du -d1 -B1` output into immediate children (sorted largest-first)
+ * plus the directory total. The line whose path equals the target is the
+ * total; the rest are immediate subdirectories. Top-level files are counted
+ * in the total but not listed individually (a `du -d1` property).
+ */
+export function parseDuDepth1(
+  output: string,
+  canonicalTarget: string
+): { entries: DirectoryUsageEntry[]; totalBytes: number } {
+  const entries: DirectoryUsageEntry[] = [];
+  let totalBytes = 0;
+  for (const line of output.split(/\r?\n/)) {
+    const match = /^(\d+)\s+(.+)$/.exec(line.trim());
+    if (!match) {
+      continue;
+    }
+    const bytes = Number.parseInt(match[1], 10);
+    const path = match[2];
+    if (path === canonicalTarget) {
+      totalBytes = bytes;
+    } else {
+      const name = path.slice(path.lastIndexOf("/") + 1);
+      entries.push({ name, sizeBytes: bytes });
+    }
+  }
+  entries.sort((a, b) => b.sizeBytes - a.sizeBytes);
+  return { entries, totalBytes };
+}
+
+export async function getWhatboxDirectoryUsage(
+  client: Client,
+  config: WhatboxConfig,
+  observeRootIndex: number,
+  relativePath: string
+) {
+  const root = config.observeRoots[observeRootIndex];
+  if (!root) {
+    throw new Error("Unknown observe-root index");
+  }
+  const candidate = resolveAllowedPath(root, relativePath);
+  if (isSensitiveDirectoryPath(candidate)) {
+    throw new Error("Sensitive directories cannot be measured");
+  }
+  const sftp = await openSftp(client);
+  let canonicalCandidate: string;
+  try {
+    const canonicalRoot = await realpath(sftp, root);
+    canonicalCandidate = await realpath(sftp, candidate);
+    if (!isWithinRoot(canonicalRoot, canonicalCandidate)) {
+      throw new Error("Resolved path escapes its observe root");
+    }
+    if (isSensitiveDirectoryPath(canonicalCandidate)) {
+      throw new Error("Sensitive directories cannot be measured");
+    }
+  } finally {
+    sftp.end();
+  }
+
+  const quoted = quotePosixShell(canonicalCandidate);
+  const { output } = await executeFixedCommandWithStatus(
+    client,
+    `LC_ALL=C nice -n 19 sh -c 'command -v ionice >/dev/null 2>&1 && exec ionice -c3 du -xH -d1 -B1 -- "$0"; exec du -xH -d1 -B1 -- "$0"' ${quoted} 2>/dev/null`,
+    ACCOUNT_QUOTA_TIMEOUT_MS
+  );
+  const { entries, totalBytes } = parseDuDepth1(output, canonicalCandidate);
+  return { relativePath: relativePath || ".", totalBytes, entries };
+}
+
+// -- Orphaned data ----------------------------------------------------------
+
+/**
+ * A top-level entry is orphaned when no torrent's data path is that entry or
+ * lives inside it — i.e. no loaded torrent references it.
+ */
+export function computeOrphans(
+  entryNames: string[],
+  basePaths: string[],
+  canonicalRoot: string
+): string[] {
+  return entryNames.filter((name) => {
+    const abs = `${canonicalRoot}/${name}`;
+    return !basePaths.some(
+      (basePath) => basePath === abs || basePath.startsWith(`${abs}/`)
+    );
+  });
+}
+
+export async function findWhatboxOrphanedData(
+  client: Client,
+  config: WhatboxConfig,
+  observeRootIndex: number,
+  relativePath: string
+) {
+  const root = config.observeRoots[observeRootIndex];
+  if (!root) {
+    throw new Error("Unknown observe-root index");
+  }
+  const basePaths = await getTorrentBasePaths(client, config);
+
+  const candidate = resolveAllowedPath(root, relativePath);
+  if (isSensitiveDirectoryPath(candidate)) {
+    throw new Error("Sensitive directories cannot be scanned");
+  }
+  const sftp = await openSftp(client);
+  let canonicalCandidate: string;
+  let entryNames: string[];
+  try {
+    const canonicalRoot = await realpath(sftp, root);
+    canonicalCandidate = await realpath(sftp, candidate);
+    if (!isWithinRoot(canonicalRoot, canonicalCandidate)) {
+      throw new Error("Resolved path escapes its observe root");
+    }
+    const entries = await readDirectory(sftp, canonicalCandidate);
+    entryNames = entries
+      .map((entry) => entry.name)
+      // Exclude sensitive dirs and the quarantine area (literal avoids a
+      // cycle with whatbox-mutations, which owns the QUARANTINE_DIRECTORY const).
+      .filter(
+        (name) =>
+          !isSensitiveDirectoryPath(name) && name !== ".whatbox-quarantine"
+      );
+  } finally {
+    sftp.end();
+  }
+
+  const orphanNames = computeOrphans(
+    entryNames,
+    basePaths,
+    canonicalCandidate
+  ).slice(0, 100);
+
+  // Size the orphans in one bounded du call.
+  const orphans: DirectoryUsageEntry[] = [];
+  if (orphanNames.length > 0) {
+    const quotedPaths = orphanNames
+      .map((name) => quotePosixShell(`${canonicalCandidate}/${name}`))
+      .join(" ");
+    const { output } = await executeFixedCommandWithStatus(
+      client,
+      `LC_ALL=C nice -n 19 du -sxH -B1 -- ${quotedPaths} 2>/dev/null`,
+      ACCOUNT_QUOTA_TIMEOUT_MS
+    );
+    const sizes = new Map<string, number>();
+    for (const line of output.split(/\r?\n/)) {
+      const match = /^(\d+)\s+(.+)$/.exec(line.trim());
+      if (match) {
+        const path = match[2];
+        sizes.set(path.slice(path.lastIndexOf("/") + 1), Number.parseInt(match[1], 10));
+      }
+    }
+    for (const name of orphanNames) {
+      orphans.push({ name, sizeBytes: sizes.get(name) ?? 0 });
+    }
+    orphans.sort((a, b) => b.sizeBytes - a.sizeBytes);
+  }
+
+  return {
+    relativePath: relativePath || ".",
+    torrentCount: basePaths.length,
+    orphanCount: orphans.length,
+    orphans
+  };
 }
 
 export async function getWhatboxAccountQuota(

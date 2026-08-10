@@ -10,6 +10,8 @@ import {
   createHostVerifier,
   isSensitiveDirectoryPath,
   parseDfOutput,
+  computeOrphans,
+  parseDuDepth1,
   parseHomeUsageOutput,
   parseQuotaOutput,
   parseNginxBinaryAvailability,
@@ -368,6 +370,36 @@ test("executeFixedCommandWithStatus times out a command that never closes", asyn
     ),
     /timed out/
   );
+});
+
+test("computeOrphans flags only entries no torrent references", () => {
+  const root = "/home/example/files";
+  const basePaths = [
+    "/home/example/files/MovieX", // exact match
+    "/home/example/files/Shows/SeriesY", // inside "Shows"
+    "/home/example/other/Thing" // outside root
+  ];
+  const orphans = computeOrphans(
+    ["MovieX", "Shows", "OldStuff", "random.iso"],
+    basePaths,
+    root
+  );
+  assert.deepEqual(orphans, ["OldStuff", "random.iso"]);
+});
+
+test("parseDuDepth1 splits children from the total, largest first", () => {
+  const target = "/home/example/files";
+  const out = [
+    "500\t/home/example/files/small",
+    "3000\t/home/example/files/big",
+    "3500\t/home/example/files"
+  ].join("\n");
+  const result = parseDuDepth1(out, target);
+  assert.equal(result.totalBytes, 3500);
+  assert.deepEqual(result.entries, [
+    { name: "big", sizeBytes: 3000 },
+    { name: "small", sizeBytes: 500 }
+  ]);
 });
 
 test("parses a du total and rejects garbage", () => {

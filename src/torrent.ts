@@ -199,6 +199,9 @@ export interface TorrentSummary {
   sizeBytes: number;
   uploadedBytes: number;
   label: string | null;
+  // Client/tracker message — empty when healthy; carries "unregistered
+  // torrent" and tracker errors that flag dead weight on private trackers.
+  message: string;
 }
 
 export interface TorrentsStatus {
@@ -212,6 +215,7 @@ export interface TorrentsStatus {
 export type TorrentControlOperation =
   | "pause"
   | "resume"
+  | "reannounce"
   | "set_label"
   | "set_ratio_limit";
 
@@ -331,7 +335,8 @@ async function transmissionStatus(
         "uploadRatio",
         "uploadedEver",
         "sizeWhenDone",
-        "labels"
+        "labels",
+        "errorString"
       ]
     }),
     await client.call("session-stats", {})
@@ -348,7 +353,8 @@ async function transmissionStatus(
     uploadedBytes: Number(torrent.uploadedEver ?? 0),
     label: Array.isArray(torrent.labels) && torrent.labels.length > 0
       ? trimName(torrent.labels[0])
-      : null
+      : null,
+    message: trimName(torrent.errorString)
   }));
   return {
     client: "transmission",
@@ -456,7 +462,13 @@ async function qbittorrentStatus(
     ratio: Math.max(0, Math.round(Number(torrent.ratio ?? 0) * 100) / 100),
     sizeBytes: Number(torrent.size ?? 0),
     uploadedBytes: Number(torrent.uploaded ?? 0),
-    label: torrent.category ? trimName(torrent.category) : null
+    label: torrent.category ? trimName(torrent.category) : null,
+    // qBittorrent's info feed has no tracker-message field; surface the
+    // error-ish states instead (a per-torrent tracker fetch would be heavy).
+    message:
+      torrent.state === "error" || torrent.state === "missingFiles"
+        ? String(torrent.state)
+        : ""
   }));
   return {
     client: "qbittorrent",
@@ -562,6 +574,8 @@ export async function controlTorrent(
       await client.call("torrent-stop", { ids });
     } else if (input.operation === "resume") {
       await client.call("torrent-start", { ids });
+    } else if (input.operation === "reannounce") {
+      await client.call("torrent-reannounce", { ids });
     } else if (input.operation === "set_label") {
       await client.call("torrent-set", {
         ids,
@@ -595,6 +609,10 @@ export async function controlTorrent(
       ["/api/v2/torrents/start", "/api/v2/torrents/resume"],
       { hashes }
     );
+  } else if (input.operation === "reannounce") {
+    await qbittorrentAction(ssh, rpc, ["/api/v2/torrents/reannounce"], {
+      hashes
+    });
   } else if (input.operation === "set_label") {
     await qbittorrentAction(ssh, rpc, ["/api/v2/torrents/setCategory"], {
       hashes,
@@ -954,8 +972,18 @@ async function rtorrentCall(
 }
 
 export function mapRtorrentTorrent(row: XmlRpcValue[]): TorrentSummary {
-  const [hash, name, state, complete, sizeBytes, completedBytes, ratio, upTotal, label] =
-    row;
+  const [
+    hash,
+    name,
+    state,
+    complete,
+    sizeBytes,
+    completedBytes,
+    ratio,
+    upTotal,
+    label,
+    message
+  ] = row;
   const size = Number(sizeBytes ?? 0);
   return {
     id: String(hash ?? ""),
@@ -973,7 +1001,8 @@ export function mapRtorrentTorrent(row: XmlRpcValue[]): TorrentSummary {
     ratio: Math.max(0, Math.round(Number(ratio ?? 0) / 10) / 100),
     sizeBytes: size,
     uploadedBytes: Number(upTotal ?? 0),
-    label: label ? trimName(safeDecodeUriComponent(String(label))) : null
+    label: label ? trimName(safeDecodeUriComponent(String(label))) : null,
+    message: trimName(message)
   };
 }
 
@@ -1003,7 +1032,8 @@ async function rtorrentStatus(
     "d.completed_bytes=",
     "d.ratio=",
     "d.up.total=",
-    "d.custom1="
+    "d.custom1=",
+    "d.message="
   ]);
   const upRate = await rtorrentCall(ssh, endpoint, "throttle.global_up.rate", []);
   const downRate = await rtorrentCall(ssh, endpoint, "throttle.global_down.rate", []);
@@ -1025,6 +1055,32 @@ async function rtorrentStatus(
     },
     torrents: torrents.slice(0, MAX_TORRENTS_RETURNED)
   };
+}
+
+/**
+ * Absolute data paths of every loaded torrent (rTorrent d.base_path), for
+ * cross-referencing against on-disk contents to find orphaned data.
+ */
+export async function getTorrentBasePaths(
+  ssh: Client,
+  config: WhatboxConfig
+): Promise<string[]> {
+  const rpc = requireTorrentRpc(config);
+  if (rpc.client !== "rtorrent") {
+    throw new Error(
+      "Orphaned-data detection currently supports rTorrent only"
+    );
+  }
+  const endpoint = await resolveRtorrentEndpoint(ssh, config, rpc);
+  const rows = await rtorrentCall(ssh, endpoint, "d.multicall2", [
+    "",
+    "main",
+    "d.base_path="
+  ]);
+  const raw = Array.isArray(rows) ? rows : [];
+  return raw
+    .map((row) => (Array.isArray(row) ? String(row[0] ?? "") : ""))
+    .filter((path) => path.length > 0);
 }
 
 function requireRtorrentHash(torrentId: string) {
@@ -1062,6 +1118,8 @@ export async function rtorrentControl(
     await rtorrentCall(ssh, endpoint, "d.stop", [hash]);
   } else if (input.operation === "resume") {
     await rtorrentCall(ssh, endpoint, "d.start", [hash]);
+  } else if (input.operation === "reannounce") {
+    await rtorrentCall(ssh, endpoint, "d.tracker_announce", [hash]);
   } else if (input.operation === "set_label") {
     await rtorrentCall(ssh, endpoint, "d.custom1.set", [
       hash,

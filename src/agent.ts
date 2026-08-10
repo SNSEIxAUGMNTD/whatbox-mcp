@@ -171,6 +171,8 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: "whatbox_operational_snapshot", title: "Operational snapshot", category: "observe", mutating: false, risk: "read_only", summary: "Consolidated storage, services, website, and safety state." },
   { name: "whatbox_storage_status", title: "Storage capacity", category: "observe", mutating: false, risk: "read_only", summary: "Filesystem capacity by allowed root." },
   { name: "whatbox_account_quota", title: "Account quota", category: "observe", mutating: false, risk: "read_only", summary: "The account's own disk quota and usage, not the shared filesystem." },
+  { name: "whatbox_directory_usage", title: "Directory usage", category: "observe", mutating: false, risk: "read_only", summary: "Per-subdirectory disk usage (largest first) — what is using the quota." },
+  { name: "whatbox_orphaned_data", title: "Orphaned data", category: "observe", mutating: false, risk: "read_only", summary: "Top-level data no loaded torrent references (rTorrent). Wasted quota." },
   { name: "whatbox_app_catalog", title: "App catalog", category: "apps", mutating: false, risk: "read_only", summary: "Curated SHA-256-pinned app templates and whether each is installed." },
   { name: "whatbox_app_install", title: "Install app template", category: "apps", mutating: true, risk: "destructive", summary: "Download a pinned artifact, verify its checksum, install it. Approval required." },
   { name: "whatbox_app_uninstall", title: "Uninstall app template", category: "apps", mutating: true, risk: "destructive", summary: "Stop, de-cron, and quarantine a template-installed app. Approval required." },
