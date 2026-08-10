@@ -4,11 +4,31 @@
 
 - Working directory: the repository root containing this document
 - Package: `whatbox-mcp`
-- Current version: `0.15.0`
+- Current version: `0.16.0`
 - Runtime: Node.js 20 or newer, TypeScript, ESM
 - Transport: local MCP stdio
 - Baseline commit: `f0c95db` on `main`. Inspect `git status` before editing and
   preserve all working-tree changes made after that commit.
+
+## 0.16.0 update
+
+- Three more app templates (real pinned SHA-256, verified by inspecting/
+  downloading the exact release): Kavita 0.9.0.2 (manga/comic/ebook reader —
+  Kavita GitHub asset digest), Lidarr 3.1.0.4875 (music *arr, self-hashed),
+  File Browser 2.63.23 (web file manager, upstream checksums.txt). Catalog is
+  now 8 apps.
+- New {{TOKEN}} mechanism (TOKEN_SENTINEL): when a manifest config contains
+  {{TOKEN}}, the install script generates a per-install secret on the slot
+  (head -c 48 /dev/urandom, alnum) and sed's it into the config. Kavita needs
+  a TokenKey; the secret never leaves the slot. File Browser is a flag-
+  configured service with no config file; Kavita runs from its binary dir so
+  config/ resolves.
+- ffmpeg deliberately NOT added: static ffmpeg builds have no stable
+  versioned URL + published checksum suitable for permanent pinning
+  (johnvansickle rotates releases → versioned URL 404s; BtbN prunes
+  autobuilds). Recorded as a finding; drive ffmpeg via whatbox_run_command
+  meanwhile. Whisparr left out (not confirmed by the user; one-line add).
+- Tests: +2 (Kavita token generation, File Browser flag service). 85 passing.
 
 ## 0.15.0 update
 

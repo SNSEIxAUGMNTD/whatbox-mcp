@@ -188,7 +188,7 @@ configuration itself and checks its file permissions.
 After connecting, ask the client to:
 
 1. read `whatbox://guide/agent-operations`;
-2. call `server_info` and confirm version `0.15.0`;
+2. call `server_info` and confirm version `0.16.0`;
 3. call `list_capabilities`;
 4. call `whatbox_configuration_status`;
 5. call `whatbox_operational_snapshot` if configuration is ready.

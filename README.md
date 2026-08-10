@@ -6,7 +6,7 @@
 
 [![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-local%20stdio-5C5CFF)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.15.0-12866f)](package.json)
+[![Version](https://img.shields.io/badge/version-0.16.0-12866f)](package.json)
 [![Tests](https://img.shields.io/badge/tests-53%20passing-2ea043)](src)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -18,7 +18,7 @@ process state, directory topology, configuration metadata, website-hosting
 readiness, and bounded userland Nginx diagnostics. It also validates local
 static-site sources and creates signed, short-lived deployment-plan previews.
 
-As of `0.15.0` it can additionally perform **approval-gated mutations** —
+As of `0.16.0` it can additionally perform **approval-gated mutations** —
 upload, download, move, mkdir, quarantine-based delete and second-approval
 purge, configuration backup, service start/stop/restart, atomic website
 deployment with rollback, and torrent add/control/remove over an SSH loopback
@@ -45,7 +45,7 @@ clear and mechanically enforced. This server is designed around four rules:
 
 ## Current release
 
-Version `0.15.0` includes everything from the read-only line —
+Version `0.16.0` includes everything from the read-only line —
 
 - a local MCP stdio server for Node.js 20+;
 - pinned SSH host verification and SSH-agent authentication;

@@ -24,6 +24,9 @@ test("every manifest carries a real 64-hex SHA-256 and a valid id", () => {
     assert.match(manifest.fetch.artifact.url, /^https:\/\//);
   }
   assert.deepEqual(listAppIds().sort(), [
+    "filebrowser",
+    "kavita",
+    "lidarr",
     "navidrome",
     "radarr",
     "rclone",
@@ -180,6 +183,27 @@ test("Sonarr install creates the config subdirectory and templates the port", ()
   assert.match(config, /<Port>28989<\/Port>/);
   assert.match(config, /<BindAddress>127\.0\.0\.1<\/BindAddress>/);
   assert.match(script, /screen -dmS sonarr .*Sonarr\/Sonarr -nobrowser/);
+});
+
+test("Kavita install generates a per-install TokenKey on the slot", () => {
+  const script = buildInstallScript(getAppManifest("kavita")!, {
+    home: HOME,
+    port: 25600
+  });
+  // The literal token never appears in the committed manifest; it is generated
+  // on the slot and sed'd into the config.
+  assert.match(script, /head -c 48 \/dev\/urandom/);
+  assert.match(script, /sed -i "s\|__WB_TOKEN__\|\$TOKEN\|"/);
+  // Runs from the binary directory so config/ resolves.
+  assert.match(script, /cd '?\/home\/example\/kavita\/Kavita'? && exec \.\/Kavita/);
+});
+
+test("File Browser runs as a flag-configured service with no config file", () => {
+  const manifest = getAppManifest("filebrowser")!;
+  assert.equal(manifest.config, undefined);
+  const script = buildInstallScript(manifest, { home: HOME, port: 26000 });
+  assert.match(script, /filebrowser -a 127\.0\.0\.1 -p 26000 -r '?\/home\/example\/files/);
+  assert.doesNotMatch(script, /__WB_TOKEN__/);
 });
 
 test("uninstall stops, de-crons, and quarantines rather than deleting", () => {

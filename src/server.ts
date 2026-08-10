@@ -37,7 +37,7 @@ import {
 } from "./whatbox.js";
 
 export const SERVER_NAME = "whatbox-mcp";
-export const SERVER_VERSION = "0.15.0";
+export const SERVER_VERSION = "0.16.0";
 
 const READ_ONLY_TOOL_ANNOTATIONS = {
   readOnlyHint: true,

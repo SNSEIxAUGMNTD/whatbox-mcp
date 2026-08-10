@@ -225,6 +225,117 @@ const RAW_MANIFESTS: AppManifest[] = [
     manualStep:
       "Add port {{PORT}} as a custom app on the Manage Links page, then finish setup (indexers, auth) in Radarr's web UI.",
     notes: "Self-contained .NET build; no external runtime. Data + DB live in ~/radarr/data."
+  },
+  {
+    id: "lidarr",
+    name: "Lidarr",
+    category: "automation",
+    summary: "Music library manager and PVR for Usenet/torrents.",
+    version: "3.1.0.4875",
+    fetch: {
+      kind: "tar.gz",
+      artifact: {
+        url: "https://github.com/Lidarr/Lidarr/releases/download/v3.1.0.4875/Lidarr.master.3.1.0.4875.linux-core-x64.tar.gz",
+        sha256:
+          "20f175aec2b908de2ae06b72544dae504efddb5db2a97ea4e36866de53bc2fa5"
+      }
+    },
+    marker: "lidarr",
+    installDir: "lidarr",
+    config: {
+      path: "data/config.xml",
+      content: [
+        "<Config>",
+        "  <Port>{{PORT}}</Port>",
+        "  <BindAddress>127.0.0.1</BindAddress>",
+        "  <UrlBase></UrlBase>",
+        "  <LaunchBrowser>False</LaunchBrowser>",
+        "  <AnalyticsEnabled>False</AnalyticsEnabled>",
+        "</Config>",
+        ""
+      ].join("\n")
+    },
+    service: {
+      start:
+        "screen -dmS lidarr {{HOME}}/lidarr/Lidarr/Lidarr -nobrowser -data={{HOME}}/lidarr/data",
+      processMatch: "lidarr/Lidarr/Lidarr",
+      cron: true,
+      port: true
+    },
+    manualStep:
+      "Add port {{PORT}} as a custom app on the Manage Links page, then finish setup in Lidarr's web UI. Pairs with Navidrome for playback.",
+    notes: "Self-contained .NET build. Data + DB live in ~/lidarr/data."
+  },
+  {
+    id: "kavita",
+    name: "Kavita",
+    category: "media-server",
+    summary: "Manga, comic, and ebook reader/server (CBZ/CBR/PDF/EPUB).",
+    version: "0.9.0.2",
+    fetch: {
+      kind: "tar.gz",
+      artifact: {
+        url: "https://github.com/Kareadita/Kavita/releases/download/v0.9.0.2/kavita-linux-x64.tar.gz",
+        sha256:
+          "7bec1747802a03daf3b5d42fabfa288c491b1d0dc5d47c4cce1dc32b6391b323"
+      }
+    },
+    marker: "kavita",
+    installDir: "kavita",
+    config: {
+      // Kavita reads config/ next to its binary; a generated TokenKey is
+      // required. Data (DB, covers) also lives here and survives upgrades.
+      path: "Kavita/config/appsettings.json",
+      content: [
+        "{",
+        '  "TokenKey": "{{TOKEN}}",',
+        '  "Port": {{PORT}},',
+        '  "IpAddresses": "127.0.0.1",',
+        '  "BaseUrl": "/",',
+        '  "Cache": 50',
+        "}",
+        ""
+      ].join("\n")
+    },
+    service: {
+      // Run from the binary's directory so config/ resolves.
+      start:
+        "screen -dmS kavita sh -c 'cd {{HOME}}/kavita/Kavita && exec ./Kavita'",
+      processMatch: "kavita/Kavita/Kavita",
+      cron: true,
+      port: true
+    },
+    manualStep:
+      "Add port {{PORT}} as a custom app on the Manage Links page, then create your admin account in Kavita's web UI and add your library (e.g. ~/files).",
+    notes: "Self-contained .NET build. Library, DB, and config live in ~/kavita/Kavita/config."
+  },
+  {
+    id: "filebrowser",
+    name: "File Browser",
+    category: "utility",
+    summary: "Web-based file manager for browsing and downloading slot files.",
+    version: "2.63.23",
+    fetch: {
+      kind: "tar.gz",
+      artifact: {
+        url: "https://github.com/filebrowser/filebrowser/releases/download/v2.63.23/linux-amd64-filebrowser.tar.gz",
+        sha256:
+          "b14db2bb8033caa3f80205eb6578b2ed0744ebd9e716b790bc4a9703ce909e88"
+      }
+    },
+    marker: "filebrowser",
+    installDir: "filebrowser",
+    service: {
+      // Flags carry the config; the SQLite db in the install dir survives upgrades.
+      start:
+        "screen -dmS filebrowser {{HOME}}/filebrowser/filebrowser -a 127.0.0.1 -p {{PORT}} -r {{HOME}}/files -d {{HOME}}/filebrowser/filebrowser.db",
+      processMatch: "filebrowser/filebrowser",
+      cron: true,
+      port: true
+    },
+    manualStep:
+      "Add port {{PORT}} as a custom app on the Manage Links page. First login is admin/admin — change the password immediately in Settings.",
+    notes: "Serves ~/files by default. The admin account and settings live in ~/filebrowser/filebrowser.db."
   }
 ];
 
@@ -253,11 +364,16 @@ export interface InstallContext {
   musicFolder?: string;
 }
 
+// Sentinel left in the written config for a per-install random secret; the
+// install script fills it after decoding the config (see buildInstallScript).
+const TOKEN_SENTINEL = "__WB_TOKEN__";
+
 function substitute(template: string, context: InstallContext): string {
   return template
     .replaceAll("{{HOME}}", context.home)
     .replaceAll("{{PORT}}", String(context.port ?? ""))
-    .replaceAll("{{MUSIC}}", context.musicFolder ?? `${context.home}/files`);
+    .replaceAll("{{MUSIC}}", context.musicFolder ?? `${context.home}/files`)
+    .replaceAll("{{TOKEN}}", TOKEN_SENTINEL);
 }
 
 const CRON_MARKER = (id: string) => `# whatbox-mcp:${id}`;
@@ -366,6 +482,14 @@ export function buildInstallScript(
     lines.push(
       `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(target)}`
     );
+    if (content.includes(TOKEN_SENTINEL)) {
+      // Generate a per-install secret on the slot and substitute it into the
+      // config; the token never leaves the slot. Alnum-only keeps sed safe.
+      lines.push(
+        "TOKEN=\"$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 64)\""
+      );
+      lines.push(`sed -i "s|${TOKEN_SENTINEL}|$TOKEN|" ${shellQuote(target)}`);
+    }
   }
 
   if (manifest.service) {
